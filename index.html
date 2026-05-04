@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="任务指挥台">
+<meta name="theme-color" content="#F0B72E">
+<title>Amanda 任务指挥台</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="icon" type="image/png" href="icons/icon-192.png">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+
+<!-- 顶部应用栏 -->
+<header id="appbar">
+  <div class="appbar-inner">
+    <div id="greeting">
+      <div class="date-line"></div>
+      <div class="greet-line"></div>
+    </div>
+    <button id="settings-btn" aria-label="设置">⚙︎</button>
+  </div>
+</header>
+
+<!-- 主内容区(每个视图一个 section,切换显示) -->
+<main id="main">
+
+  <!-- 1. 今日 -->
+  <section class="view" data-view="today">
+    <div class="stats-row" id="stats-row"></div>
+    <div id="today-content"></div>
+  </section>
+
+  <!-- 2. 本周 -->
+  <section class="view" data-view="week" hidden>
+    <div id="week-content"></div>
+  </section>
+
+  <!-- 3. 人 -->
+  <section class="view" data-view="people" hidden>
+    <div class="filter-bar" id="people-filter">
+      <button class="chip active" data-filter="all">全部</button>
+      <button class="chip" data-filter="customer">客户</button>
+      <button class="chip" data-filter="team">团队</button>
+      <button class="chip" data-filter="overdue">有逾期</button>
+    </div>
+    <div id="people-content"></div>
+  </section>
+
+  <!-- 4. 节奏 -->
+  <section class="view" data-view="rhythm" hidden>
+    <div class="filter-bar" id="rhythm-filter">
+      <button class="chip active" data-rhythm="frequency">频率型</button>
+      <button class="chip" data-rhythm="date">日期型</button>
+    </div>
+    <div id="rhythm-content"></div>
+  </section>
+
+  <!-- 5. 出差 -->
+  <section class="view" data-view="trip" hidden>
+    <div class="trip-header">
+      <h2>出差</h2>
+      <p class="muted">每次出差是一个临时项目</p>
+    </div>
+    <div id="trip-content"></div>
+  </section>
+
+</main>
+
+<!-- 浮动新建按钮 -->
+<button id="fab" aria-label="新建任务">+</button>
+
+<!-- 底部 Tab 导航 -->
+<nav id="tabbar">
+  <button class="tab active" data-tab="today">
+    <span class="tab-icon">●</span><span class="tab-label">今日</span>
+    <span class="tab-badge" id="badge-today" hidden></span>
+  </button>
+  <button class="tab" data-tab="week">
+    <span class="tab-icon">▤</span><span class="tab-label">本周</span>
+  </button>
+  <button class="tab" data-tab="people">
+    <span class="tab-icon">◉</span><span class="tab-label">人物</span>
+  </button>
+  <button class="tab" data-tab="rhythm">
+    <span class="tab-icon">↻</span><span class="tab-label">节奏</span>
+  </button>
+  <button class="tab" data-tab="trip">
+    <span class="tab-icon">✈</span><span class="tab-label">出差</span>
+  </button>
+</nav>
+
+<!-- 模态层 -->
+<div id="modal-root"></div>
+
+<!-- Toast 提示层 -->
+<div id="toast-root"></div>
+
+<!-- Firebase SDK(可选,未配置时本地模式) -->
+<script type="module">
+  // 仅当 firebase-config.js 中填入了真实配置时才连接云端
+  // 默认用 localStorage,数据立刻可用
+</script>
+
+<script src="firebase-config.js"></script>
+<script src="app.js"></script>
+<script>
+  // 注册 Service Worker(PWA + 推送)
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('service-worker.js')
+        .catch(err => console.warn('SW 注册失败:', err));
+    });
+  }
+</script>
+
+</body>
+</html>
