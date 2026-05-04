@@ -2,7 +2,7 @@
  * Service Worker - 离线缓存 + Push 推送接收
  * ===================================================================== */
 
-const CACHE_VERSION = 'amanda-tasks-v1.8-watercolor';
+const CACHE_VERSION = 'amanda-tasks-v1.9-oil';
 const CORE_FILES = [
   './',
   './index.html',
