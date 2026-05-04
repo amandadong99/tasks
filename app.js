@@ -1349,6 +1349,9 @@ function openSettings() {
   const fbState = !fbEnabled ? '未启用(本地模式)' :
                   fbReady ? '✓ 已连接,数据加密同步中' :
                   hasKey ? '已设密钥但未连接(网络/配置)' : '请输入工作密钥登录';
+  const pushState = ('Notification' in window) ?
+    (Notification.permission === 'granted' ? '已授权' :
+     Notification.permission === 'denied' ? '已拒绝(需在系统设置开启)' : '未授权') : '不支持';
 
   openModal({
     title: '设置',
