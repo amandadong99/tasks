@@ -1238,7 +1238,10 @@ function saveTaskFromModal(orig, isEdit) {
 /* ---------------------------------------------------------------------
  * 14. 模态层(通用)
  * ------------------------------------------------------------------ */
+let _modalCloseTimer = null;
 function openModal({ title, body, actions = [], extraButtons = [] }) {
+  // 取消之前 closeModal 排的延迟清空,防止覆盖刚渲染的内容(链式关→开 bug)
+  if (_modalCloseTimer) { clearTimeout(_modalCloseTimer); _modalCloseTimer = null; }
   const root = $('#modal-root');
   root.innerHTML = `
     <div class="modal-backdrop"></div>
@@ -1270,7 +1273,11 @@ function btnHtml(b, id) {
 function closeModal() {
   const root = $('#modal-root');
   root.classList.remove('open');
-  setTimeout(() => root.innerHTML = '', 250);
+  if (_modalCloseTimer) clearTimeout(_modalCloseTimer);
+  _modalCloseTimer = setTimeout(() => {
+    root.innerHTML = '';
+    _modalCloseTimer = null;
+  }, 250);
 }
 
 /* ---------------------------------------------------------------------
