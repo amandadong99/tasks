@@ -28,12 +28,12 @@ window.AmandaFirebase = {
   /* === 用户配置区(改这里)=== */
   ENABLED: true,
   config: {
-    apiKey: "AIzaSyDWiFntDTYu2XXH3Kz3ArbmrvUbfKOJER4",
-    authDomain: "qiangtong-crm.firebaseapp.com",
-    projectId: "qiangtong-crm",
-    storageBucket: "qiangtong-crm.firebasestorage.app",
-    messagingSenderId: "811603365425",
-    appId: "1:811603365425:web:e17ce95d13cdeb29ec4f10",
+    apiKey: "AIzaSyDgvuoNtTm1UCQhVfKmhlnUwDLIaR88Eiw",
+    authDomain: "amanda-tasks.firebaseapp.com",
+    projectId: "amanda-tasks",
+    storageBucket: "amanda-tasks.firebasestorage.app",
+    messagingSenderId: "200292789463",
+    appId: "1:200292789463:web:131697b8d7a87fe82e1492",
   },
   /* ======================== */
 
