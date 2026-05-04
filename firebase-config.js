@@ -26,14 +26,14 @@
 window.AmandaFirebase = {
 
   /* === 用户配置区(改这里)=== */
-  ENABLED: false,                // 改成 true 启用云端同步
+  ENABLED: true,
   config: {
-    apiKey: "",
-    authDomain: "",
-    projectId: "",                // 复用 CRM 项目时填同一个 projectId
-    storageBucket: "",
-    messagingSenderId: "",
-    appId: "",
+    apiKey: "AIzaSyDWiFntDTYu2XXH3Kz3ArbmrvUbfKOJER4",
+    authDomain: "qiangtong-crm.firebaseapp.com",
+    projectId: "qiangtong-crm",
+    storageBucket: "qiangtong-crm.firebasestorage.app",
+    messagingSenderId: "811603365425",
+    appId: "1:811603365425:web:e17ce95d13cdeb29ec4f10",
   },
   /* ======================== */
 
