@@ -1309,9 +1309,21 @@ function renderAll() {
 function updateBadges() {
   const overdue = State.tasks.filter(isOverdue).length;
   const todayN = State.tasks.filter(t => isTodayOrOverdue(t)).length;
+
+  // App内 Tab 徽章
   const badge = $('#badge-today');
   if (todayN > 0) { badge.hidden = false; badge.textContent = todayN; }
   else { badge.hidden = true; }
+
+  // iPhone 主屏图标徽章(iOS 16.4+ PWA Badging API)
+  // 需要用户先授权通知;已加到主屏后才会显示
+  if ('setAppBadge' in navigator) {
+    if (todayN > 0) {
+      navigator.setAppBadge(todayN).catch(() => {});
+    } else {
+      navigator.clearAppBadge().catch(() => {});
+    }
+  }
 }
 
 function renderGreeting() {
@@ -1349,15 +1361,16 @@ function openSettings() {
             ? `<button class="btn flex1 btn-danger" id="set-relock">退出登录(清除本机密钥)</button>`
             : `<button class="btn flex1 btn-primary" id="set-login">输入密钥登录</button>`}
         </div>
+        ${fbReady ? `<button class="btn btn-block" id="set-refresh" style="margin-top:8px">↻ 立即从云端刷新</button>` : ''}
         <div class="muted small">密钥用 AES-GCM 256位 加密所有数据,Firebase 也看不到内容。换浏览器需要重新输入。</div>
       ` : `
         <div class="muted small">在 firebase-config.js 填入 Firebase 配置并设 ENABLED:true 后,启用云端加密同步。</div>
       `}
 
-      <h3 style="margin-top:18px">推送通知</h3>
+      <h3 style="margin-top:18px">通知 & 主屏徽章</h3>
       <div class="muted small">状态:${pushState}</div>
-      <button class="btn btn-block" id="set-push">${pushState==='已授权'?'测试本地通知':'授权通知'}</button>
-      <div class="muted small">推送在 iOS 上需先把 App 添加到主屏并从主屏图标启动。</div>
+      <button class="btn btn-block" id="set-push">${pushState==='已授权'?'测试通知 + 刷新徽章':'授权通知 + 启用主屏数字徽章'}</button>
+      <div class="muted small">授权后:① 主屏图标右上角自动显示今日待办数量(超期+今日,红色徽章);② 后续可接收任务到期提醒。iOS 必须先把 App 添加到主屏并从主屏图标启动。</div>
 
       <h3 style="margin-top:18px">数据</h3>
       <div class="row">
@@ -1384,6 +1397,22 @@ function openSettings() {
     closeModal();
     Lock.showOverlay({ mode: 'create' });
   });
+  document.getElementById('set-refresh')?.addEventListener('click', async () => {
+    const btn = document.getElementById('set-refresh');
+    btn.textContent = '正在从云端拉取…';
+    btn.disabled = true;
+    try {
+      const r = await window.AmandaFirebase.refresh();
+      if (r.ok) {
+        toast(r.changed > 0 ? `已同步 ${r.changed} 类变更` : '已是最新');
+      } else {
+        toast('刷新失败');
+      }
+    } finally {
+      btn.textContent = '↻ 立即从云端刷新';
+      btn.disabled = false;
+    }
+  });
   $('#set-push').onclick = requestNotificationPermission;
   $('#set-export').onclick = exportData;
   $('#set-import').onclick = importData;
@@ -1393,11 +1422,18 @@ function openSettings() {
 async function requestNotificationPermission() {
   if (!('Notification' in window)) return toast('当前浏览器不支持通知');
   if (Notification.permission === 'granted') {
-    new Notification('任务指挥台', { body: '通知已开启 ✓' });
+    new Notification('任务指挥台', { body: '通知与主屏徽章已开启 ✓' });
+    // 立刻刷新一下徽章,让用户马上看到效果
+    updateBadges();
     return;
   }
   const p = await Notification.requestPermission();
-  toast(p === 'granted' ? '已授权' : '未授权');
+  if (p === 'granted') {
+    toast('已授权 — 主屏图标会显示待办数字');
+    updateBadges();
+  } else {
+    toast('未授权');
+  }
 }
 
 function exportData() {
@@ -1582,6 +1618,17 @@ function init() {
     renderGreeting();
     renderCurrentView();
   }, 60000);
+
+  // 切回前台时主动从云端拉一次最新数据(iOS PWA 后台时连接可能被挂起)
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && window.AmandaFirebase?.ready) {
+      window.AmandaFirebase.refresh?.().then(r => {
+        if (r?.changed > 0) {
+          console.info('[Sync] 切回前台:同步了', r.changed, '类变更');
+        }
+      }).catch(e => console.warn('[Sync] refresh err', e));
+    }
+  });
 
   // 控制台命令 + 暴露给 firebase-config.js 调用
   window.AmandaTasks = { State, Store, KEY, renderAll, captureSyncSnapshot, Lock };

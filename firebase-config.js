@@ -216,14 +216,15 @@ window.AmandaFirebase = {
     }
     A.renderAll();
 
-    // 2. 订阅实时变更
+    // 2. 订阅实时变更(per-change 元数据过滤,避免本地挂起写阻塞远端通知)
     for (const stateKey of Object.keys(this.collMap)) {
       const unsub = onSnapshot(this._coll(stateKey), async (snap) => {
-        if (snap.metadata.hasPendingWrites) return;
         this.applyingRemote = true;
         try {
           let changed = 0;
           for (const change of snap.docChanges()) {
+            // 跳过本地刚发出还没server确认的回声(per-change 判断)
+            if (change.doc.metadata.hasPendingWrites) continue;
             const data = change.doc.data();
             let item = null;
             if (data.iv && data.ct) {
@@ -234,8 +235,11 @@ window.AmandaFirebase = {
             const items = A.State[stateKey];
             const idx = items.findIndex(x => x.id === item.id);
             if (change.type === 'added' || change.type === 'modified') {
-              if (idx >= 0) items[idx] = item; else items.push(item);
-              changed++;
+              // 仅当数据真的有差异时计变更(避免echo自己已有的数据)
+              if (idx < 0) { items.push(item); changed++; }
+              else if (JSON.stringify(items[idx]) !== JSON.stringify(item)) {
+                items[idx] = item; changed++;
+              }
             } else if (change.type === 'removed') {
               if (idx >= 0) { items.splice(idx, 1); changed++; }
             }
@@ -244,12 +248,51 @@ window.AmandaFirebase = {
             A.Store.save(A.KEY[stateKey], A.State[stateKey]);
             A.captureSyncSnapshot?.();
             A.renderAll();
-            console.info(`[Sync] 远端变更 ${stateKey}: ${changed}`);
+            console.info(`[Sync] 远端变更 ${stateKey}: ${changed} 条`);
+            this._showStatus(`☁ 已同步 ${changed} 条远端变更`, false);
           }
         } finally { this.applyingRemote = false; }
       }, (err) => console.error(`[Sync] 订阅 ${stateKey}:`, err));
       this.unsubs.push(unsub);
     }
+  },
+
+  /** 手动从云端拉取最新数据(用于 iPhone 切回前台时"踢一脚")*/
+  async refresh() {
+    if (!this.ready || !this._firstSyncDone) return { ok: false };
+    const { getDocs } = this._modules;
+    const A = window.AmandaTasks;
+    if (!A) return { ok: false };
+    let totalChanged = 0;
+    this.applyingRemote = true;
+    try {
+      for (const stateKey of Object.keys(this.collMap)) {
+        const snap = await getDocs(this._coll(stateKey));
+        const remoteItems = [];
+        for (const d of snap.docs) {
+          const data = d.data();
+          try {
+            if (data.iv && data.ct) {
+              const pt = await this.Crypto.decrypt(this.cryptoKey, { iv: data.iv, ct: data.ct });
+              remoteItems.push(JSON.parse(pt));
+            } else { delete data._syncedAt; remoteItems.push(data); }
+          } catch {}
+        }
+        // 用 JSON 比较来识别是否有变化
+        const oldStr = JSON.stringify(A.State[stateKey]);
+        const newStr = JSON.stringify(remoteItems);
+        if (oldStr !== newStr) {
+          A.State[stateKey] = remoteItems;
+          A.Store.save(A.KEY[stateKey], remoteItems);
+          totalChanged++;
+        }
+      }
+      if (totalChanged > 0) {
+        A.captureSyncSnapshot?.();
+        A.renderAll();
+      }
+    } finally { this.applyingRemote = false; }
+    return { ok: true, changed: totalChanged };
   },
 
   async _setEncrypted(stateKey, item) {
