@@ -181,6 +181,7 @@ function seedTemplates() {
         { title: '定酒店', stage: '出行准备', daysBeforeDeparture: 14, alertLevel: '普通' },
         { title: '准备宣传册 + 压机样板', stage: '出行准备', daysBeforeDeparture: 10, alertLevel: '普通' },
         { title: '客户礼物', stage: '出行准备', daysBeforeDeparture: 7, alertLevel: '普通' },
+        { title: '备份电脑本地盘数据到移动硬盘(防出差中电脑丢失)', stage: '出行准备', daysBeforeDeparture: 1, alertLevel: '琥珀提醒' },
         { title: '打印行程单、确认接机', stage: '出行准备', daysBeforeDeparture: 2, alertLevel: '普通' },
         { title: '整理拜访客户清单', stage: '客户排期', daysBeforeDeparture: 14, alertLevel: '普通' },
         { title: '联系并确认每位客户拜访时间', stage: '客户排期', daysBeforeDeparture: 10, alertLevel: '普通' },
@@ -200,6 +201,7 @@ function seedTemplates() {
         { title: '定机票【最后窗口】', stage: '出行准备', daysBeforeDeparture: 20, alertLevel: '红色警告' },
         { title: '寄送展品/样板', stage: '出行准备', daysBeforeDeparture: 21, alertLevel: '普通' },
         { title: '准备宣传册 + 样品', stage: '出行准备', daysBeforeDeparture: 10, alertLevel: '普通' },
+        { title: '备份电脑本地盘数据到移动硬盘(防出差中电脑丢失)', stage: '出行准备', daysBeforeDeparture: 1, alertLevel: '琥珀提醒' },
         { title: '提前布展', stage: '出行准备', daysBeforeDeparture: 1, alertLevel: '普通' },
         { title: '展会名片扫描入库', stage: '行程后跟进', daysBeforeDeparture: -3, alertLevel: '普通' },
         { title: '整理展会潜在客户清单 + 分配跟进', stage: '行程后跟进', daysBeforeDeparture: -7, alertLevel: '普通' },
@@ -211,6 +213,7 @@ function seedTemplates() {
         { title: '定机票/高铁票', stage: '出行准备', daysBeforeDeparture: 14, alertLevel: '普通' },
         { title: '定酒店', stage: '出行准备', daysBeforeDeparture: 7, alertLevel: '普通' },
         { title: '准备资料', stage: '出行准备', daysBeforeDeparture: 3, alertLevel: '普通' },
+        { title: '备份电脑本地盘数据到移动硬盘(防出差中电脑丢失)', stage: '出行准备', daysBeforeDeparture: 1, alertLevel: '琥珀提醒' },
         { title: '确认拜访清单', stage: '客户排期', daysBeforeDeparture: 7, alertLevel: '普通' },
         { title: '客户档案更新', stage: '行程后跟进', daysBeforeDeparture: -3, alertLevel: '普通' },
       ],
@@ -249,6 +252,32 @@ function initData() {
   }
   // 自动生成日期型任务的当日实例
   generateDateBasedInstances();
+  // 软迁移:为老用户的出差模板自动补上"备份数据"任务
+  migrateTripTemplates();
+}
+
+/**
+ * 软迁移:把"备份电脑本地盘数据到移动硬盘"任务自动加进所有出差模板
+ * 旧用户的模板没有这条 → 检测后自动追加 → 持久化(同步到云端)
+ */
+function migrateTripTemplates() {
+  let changed = false;
+  const backupTaskPattern = /备份电脑本地盘/;
+  for (const tpl of State.templates) {
+    if (!tpl.tasks.some(t => backupTaskPattern.test(t.title))) {
+      tpl.tasks.push({
+        title: '备份电脑本地盘数据到移动硬盘(防出差中电脑丢失)',
+        stage: '出行准备',
+        daysBeforeDeparture: 1,
+        alertLevel: '琥珀提醒',
+      });
+      changed = true;
+    }
+  }
+  if (changed) {
+    persistTemplates();
+    console.info('[Migrate] 已为现有出差模板补上"备份数据"任务');
+  }
 }
 
 /* 持久化 + Firebase 同步 */
@@ -1423,20 +1452,74 @@ function openSettings() {
 }
 
 async function requestNotificationPermission() {
-  if (!('Notification' in window)) return toast('当前浏览器不支持通知');
+  if (!('Notification' in window)) return alert('当前浏览器不支持通知');
+
+  // 已授权 → 跑一次完整诊断
   if (Notification.permission === 'granted') {
-    new Notification('任务指挥台', { body: '通知与主屏徽章已开启 ✓' });
-    // 立刻刷新一下徽章,让用户马上看到效果
-    updateBadges();
+    runBadgeDiagnostic();
     return;
   }
+
+  // 未授权 → 请求授权
   const p = await Notification.requestPermission();
   if (p === 'granted') {
-    toast('已授权 — 主屏图标会显示待办数字');
-    updateBadges();
+    new Notification('任务指挥台', { body: '通知已开启,正在测试主屏徽章…' });
+    setTimeout(runBadgeDiagnostic, 500);
   } else {
-    toast('未授权');
+    alert('授权被拒绝。如要重新授权,需要在 iPhone 设置 → 通知 → 任务指挥台 中重新开启,或删除主屏图标重新添加。');
   }
+}
+
+async function runBadgeDiagnostic() {
+  const isStandalone = window.matchMedia('(display-mode: standalone)').matches ||
+                       window.navigator.standalone === true;
+  const hasBadgeAPI = 'setAppBadge' in navigator;
+  const notifPerm = Notification.permission;
+  const ua = navigator.userAgent;
+  const isIOS = /iPhone|iPad|iPod/.test(ua);
+  const iosMatch = ua.match(/OS (\d+)_(\d+)/);
+  const iosVer = iosMatch ? `${iosMatch[1]}.${iosMatch[2]}` : '未知';
+
+  let setBadgeResult = '未尝试';
+  let clearBadgeResult = '未尝试';
+  if (hasBadgeAPI) {
+    try {
+      await navigator.setAppBadge(99);
+      setBadgeResult = '✓ 成功(主屏图标应显示 99)';
+    } catch (e) {
+      setBadgeResult = '✗ ' + (e.message || e.name || String(e));
+    }
+    // 等2秒清掉测试值
+    setTimeout(async () => {
+      try {
+        const todayN = State.tasks.filter(t => isTodayOrOverdue(t)).length;
+        if (todayN > 0) await navigator.setAppBadge(todayN);
+        else await navigator.clearAppBadge();
+      } catch {}
+    }, 2500);
+  }
+
+  const report = `
+🔍 主屏徽章诊断
+━━━━━━━━━━━━━━━━━━━━━━━
+
+iOS 设备: ${isIOS ? '是' : '否(${ua.slice(0,40)})'}
+iOS 版本: ${iosVer} ${isIOS && iosMatch ? (parseInt(iosMatch[1]) > 16 || (parseInt(iosMatch[1]) === 16 && parseInt(iosMatch[2]) >= 4) ? '✓' : '✗ 需 ≥ 16.4') : ''}
+
+PWA 主屏模式: ${isStandalone ? '✓ 是' : '✗ 否(必须从主屏图标启动)'}
+setAppBadge API: ${hasBadgeAPI ? '✓ 浏览器支持' : '✗ 不支持'}
+通知权限: ${notifPerm === 'granted' ? '✓ 已授权' : (notifPerm === 'denied' ? '✗ 已拒绝' : '○ 未授权')}
+
+设置徽章测试(应显示99):
+  ${setBadgeResult}
+
+━━━━━━━━━━━━━━━━━━━━━━━
+${isStandalone && hasBadgeAPI && notifPerm === 'granted'
+  ? '⚠️ 所有条件都满足。如果主屏仍无红点,试:\n1. 锁屏一次再亮屏\n2. 删主屏图标重新添加\n3. iOS 系统bug,重启iPhone'
+  : '❌ 上面的 ✗ 项就是阻塞原因'}
+  `.trim();
+
+  alert(report);
 }
 
 function exportData() {
