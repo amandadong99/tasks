@@ -1145,11 +1145,11 @@ function renderTripCalendarMonth(year, month, trips) {
       <div class="trip-cal-num">${day}</div>
     </div>`;
   }
-  html += `</div>`;
 
-  // 把出差色条放在日期数字下方(不覆盖数字),按槽位垂直堆叠
+  // 出差色条:作为 grid 的子元素(position:absolute),top 起点 = grid 顶部 = 第一行起点
+  // 这样 bar.top = ${r} * row-h + HEAD_RESERVE 就刚好落在日期数字下方
   if (monthTrips.length) {
-    html += `<div class="trip-cal-bars" style="--head:${HEAD_RESERVE}px;--slot-h:${SLOT_HEIGHT}px;--slot-gap:${SLOT_GAP}px">`;
+    html += `<div class="trip-cal-bars">`;
     monthTrips.forEach((trip) => {
       const dep = new Date(trip.departureDate);
       const ret = new Date(trip.returnDate);
@@ -1183,7 +1183,8 @@ function renderTripCalendarMonth(year, month, trips) {
     html += `</div>`;
   }
 
-  html += `</div>`;
+  html += `</div>`;  // close .trip-cal-grid
+  html += `</div>`;  // close .trip-calendar
   return html;
 }
 

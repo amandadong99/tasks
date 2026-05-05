@@ -685,7 +685,10 @@ button { font-family: inherit; }
   border-bottom: 0.5px solid var(--c-divider);
   padding: 3px 5px;
   position: relative; box-sizing: border-box;
+  z-index: 2;          /* 让单元格(及里面的日期数字)高于色条 */
+  pointer-events: none; /* 让色条可以接收点击 */
 }
+.trip-cal-cell .trip-cal-num { pointer-events: auto; }
 .trip-cal-cell:nth-child(7n) { border-right: none; }
 .trip-cal-cell.empty { background: rgba(0,0,0,0.015); }
 .trip-cal-cell.is-today { background: var(--c-primary-soft); }
