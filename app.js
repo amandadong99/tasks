@@ -71,11 +71,12 @@ const NOTE_CATEGORIES = {
 const NOTE_CAT_KEYS = Object.keys(NOTE_CATEGORIES);
 
 const TRIP_TYPES = {
-  expo:    { name: '展会',     color: '#F59E0B', soft: '#FEF3C7' },
-  visit:   { name: '拜访客户', color: '#7C3AED', soft: '#EDE9FE' },
-  inspect: { name: '考察',     color: '#10B981', soft: '#D1FAE5' },
-  travel:  { name: '旅行/休假', color: '#EC4899', soft: '#FCE7F3' },
-  other:   { name: '其他',     color: '#6B7280', soft: '#F3F4F6' },
+  paidExpo: { name: '付费展会', color: '#F59E0B', shades: ['#F59E0B', '#FBBF24', '#FCD34D', '#FDE68A'], soft: '#FEF3C7' },
+  freeExpo: { name: '免费展会', color: '#3B82F6', shades: ['#3B82F6', '#60A5FA', '#93C5FD', '#BFDBFE'], soft: '#DBEAFE' },
+  visit:    { name: '拜访客户', color: '#7C3AED', shades: ['#7C3AED', '#A78BFA', '#C4B5FD', '#DDD6FE'], soft: '#EDE9FE' },
+  inspect:  { name: '考察',     color: '#10B981', shades: ['#10B981', '#34D399', '#6EE7B7', '#A7F3D0'], soft: '#D1FAE5' },
+  travel:   { name: '旅行',     color: '#EC4899', shades: ['#EC4899', '#F472B6', '#F9A8D4', '#FBCFE8'], soft: '#FCE7F3' },
+  other:    { name: '其他',     color: '#6B7280', shades: ['#6B7280', '#9CA3AF', '#D1D5DB', '#E5E7EB'], soft: '#F3F4F6' },
 };
 
 const Store = {
@@ -210,20 +211,36 @@ function seedTemplates() {
       ],
     },
     {
-      id: 'tpl-expo', name: '展会出差(含布展)', isBuiltIn: true,
+      id: 'tpl-expo-paid', name: '付费展会(含布展+海报+样品)', isBuiltIn: true,
       tasks: [
         { title: '申请签证', stage: '出行准备', daysBeforeDeparture: 60, alertLevel: '普通' },
         { title: '定酒店【展馆附近窗口】', stage: '出行准备', daysBeforeDeparture: 45, alertLevel: '琥珀提醒' },
-        { title: '定酒店【最后窗口】', stage: '出行准备', daysBeforeDeparture: 30, alertLevel: '红色警告' },
+        { title: '装修准备(展位设计 / 装修方案)', stage: '出行准备', daysBeforeDeparture: 30, alertLevel: '琥珀提醒' },
         { title: '定机票【便宜价窗口】', stage: '出行准备', daysBeforeDeparture: 30, alertLevel: '琥珀提醒' },
-        { title: '确认参展资料(展位号、布展物料)', stage: '出行准备', daysBeforeDeparture: 30, alertLevel: '普通' },
+        { title: '定酒店【最后窗口】', stage: '出行准备', daysBeforeDeparture: 30, alertLevel: '红色警告' },
+        { title: '寄送展品 / 样板', stage: '出行准备', daysBeforeDeparture: 21, alertLevel: '普通' },
         { title: '定机票【最后窗口】', stage: '出行准备', daysBeforeDeparture: 20, alertLevel: '红色警告' },
-        { title: '寄送展品/样板', stage: '出行准备', daysBeforeDeparture: 21, alertLevel: '普通' },
-        { title: '准备宣传册 + 样品', stage: '出行准备', daysBeforeDeparture: 10, alertLevel: '普通' },
+        { title: '海报 + 宣传样册准备', stage: '出行准备', daysBeforeDeparture: 15, alertLevel: '琥珀提醒' },
+        { title: '样品 + 名片准备', stage: '出行准备', daysBeforeDeparture: 10, alertLevel: '普通' },
+        { title: '入场牌申请 / 现场注册', stage: '出行准备', daysBeforeDeparture: 5, alertLevel: '普通' },
         { title: '备份电脑本地盘数据到移动硬盘(防出差中电脑丢失)', stage: '出行准备', daysBeforeDeparture: 1, alertLevel: '琥珀提醒' },
         { title: '提前布展', stage: '出行准备', daysBeforeDeparture: 1, alertLevel: '普通' },
         { title: '展会名片扫描入库', stage: '行程后跟进', daysBeforeDeparture: -3, alertLevel: '普通' },
         { title: '整理展会潜在客户清单 + 分配跟进', stage: '行程后跟进', daysBeforeDeparture: -7, alertLevel: '普通' },
+      ],
+    },
+    {
+      id: 'tpl-expo-free', name: '免费展会(简化版)', isBuiltIn: true,
+      tasks: [
+        { title: '申请签证', stage: '出行准备', daysBeforeDeparture: 60, alertLevel: '普通' },
+        { title: '定机票【便宜价窗口】', stage: '出行准备', daysBeforeDeparture: 30, alertLevel: '琥珀提醒' },
+        { title: '定机票【最后窗口】', stage: '出行准备', daysBeforeDeparture: 20, alertLevel: '红色警告' },
+        { title: '定酒店', stage: '出行准备', daysBeforeDeparture: 14, alertLevel: '普通' },
+        { title: '样册 + 样品 + 名片准备', stage: '出行准备', daysBeforeDeparture: 10, alertLevel: '普通' },
+        { title: '入场牌申请 / 现场注册', stage: '出行准备', daysBeforeDeparture: 5, alertLevel: '普通' },
+        { title: '备份电脑本地盘数据到移动硬盘(防出差中电脑丢失)', stage: '出行准备', daysBeforeDeparture: 1, alertLevel: '琥珀提醒' },
+        { title: '展会名片扫描入库', stage: '行程后跟进', daysBeforeDeparture: -3, alertLevel: '普通' },
+        { title: '整理潜在客户清单 + 分配跟进', stage: '行程后跟进', daysBeforeDeparture: -7, alertLevel: '普通' },
       ],
     },
     {
@@ -250,7 +267,9 @@ const State = {
   templates: [],
   notes: [],
   ui: { tab: 'today', peopleFilter: 'all', rhythmTab: 'frequency',
-        notesFilter: 'all', tripView: 'calendar' },
+        notesFilter: 'all', tripView: 'calendar',
+        tripCalYear: null, tripCalMonth: null,   // 当前显示的月份
+        tripCardCollapsed: {} },                  // trip.id -> bool 折叠状态
 };
 
 function initData() {
@@ -285,8 +304,11 @@ function initData() {
  * 旧用户的模板没有这条 → 检测后自动追加 → 持久化(同步到云端)
  */
 function migrateTripTemplates() {
-  let changed = false;
+  let templatesChanged = false;
+  let tripsChanged = false;
   const backupTaskPattern = /备份电脑本地盘/;
+
+  // 1. 现有模板补"备份电脑数据"任务
   for (const tpl of State.templates) {
     if (!tpl.tasks.some(t => backupTaskPattern.test(t.title))) {
       tpl.tasks.push({
@@ -295,21 +317,60 @@ function migrateTripTemplates() {
         daysBeforeDeparture: 1,
         alertLevel: '琥珀提醒',
       });
-      changed = true;
+      templatesChanged = true;
     }
   }
-  // 旧文案 → 新文案(已存在的模板也升级)
+
+  // 2. 旧文案 → 新文案
   for (const tpl of State.templates) {
     for (const task of tpl.tasks) {
       if (task.title === '准备宣传册 + 压机样板') {
         task.title = '准备宣传册 + 名片 + 样板 + 礼品';
-        changed = true;
+        templatesChanged = true;
       }
     }
   }
-  if (changed) {
+
+  // 3. 老的 'tpl-expo' 模板 → 升级为新的"付费展会"模板(整体替换任务列表)
+  const expoIdx = State.templates.findIndex(t => t.id === 'tpl-expo');
+  if (expoIdx >= 0) {
+    const seedTpls = seedTemplates();
+    const newPaid = seedTpls.find(t => t.id === 'tpl-expo-paid');
+    State.templates[expoIdx] = newPaid;
+    templatesChanged = true;
+    console.info('[Migrate] tpl-expo → tpl-expo-paid');
+  }
+
+  // 4. 如果没有 tpl-expo-free 模板,加上
+  if (!State.templates.some(t => t.id === 'tpl-expo-free')) {
+    const seedTpls = seedTemplates();
+    const newFree = seedTpls.find(t => t.id === 'tpl-expo-free');
+    if (newFree) {
+      State.templates.push(newFree);
+      templatesChanged = true;
+      console.info('[Migrate] 新增 tpl-expo-free 免费展会模板');
+    }
+  }
+
+  // 5. 老 trip:tripType='expo' → 'paidExpo';templateId='tpl-expo' → 'tpl-expo-paid'
+  for (const trip of State.trips) {
+    if (trip.tripType === 'expo') {
+      trip.tripType = 'paidExpo';
+      tripsChanged = true;
+    }
+    if (trip.templateId === 'tpl-expo') {
+      trip.templateId = 'tpl-expo-paid';
+      tripsChanged = true;
+    }
+  }
+
+  if (templatesChanged) {
     persistTemplates();
     console.info('[Migrate] 出差模板已升级');
+  }
+  if (tripsChanged) {
+    persistTrips();
+    console.info('[Migrate] 历史出差行程已迁移');
   }
 }
 
@@ -880,10 +941,17 @@ function openNoteModal(noteId) {
  * ------------------------------------------------------------------ */
 function renderTrip() {
   const root = $('#trip-content');
+  const today = todayISO();
+  // 列表排序:出发时间由近到远(待启动按出发日升序;已完成按出发日降序;进行中插最前)
   const trips = [...State.trips].sort((a, b) => {
-    const order = { '进行中': 0, '待启动': 1, '已完成': 2 };
-    if (order[a.status] !== order[b.status]) return order[a.status] - order[b.status];
-    return new Date(b.departureDate) - new Date(a.departureDate);
+    const aOngoing = a.departureDate <= today && a.returnDate >= today;
+    const bOngoing = b.departureDate <= today && b.returnDate >= today;
+    if (aOngoing !== bOngoing) return aOngoing ? -1 : 1;
+    const aFuture = a.departureDate >= today;
+    const bFuture = b.departureDate >= today;
+    if (aFuture !== bFuture) return aFuture ? -1 : 1;  // upcoming 先于 past
+    if (aFuture) return new Date(a.departureDate) - new Date(b.departureDate);  // 近的在前
+    return new Date(b.departureDate) - new Date(a.departureDate);  // past:最近的在前
   });
 
   // 顶部工具条 + 视图切换
@@ -922,36 +990,115 @@ function renderTrip() {
       renderTrip();
     };
   });
-  $$('.trip-card', root).forEach(el => {
-    el.addEventListener('click', () => openTripDetail(el.dataset.tripId));
-  });
   $$('.trip-cal-bar', root).forEach(el => {
     el.addEventListener('click', () => openTripDetail(el.dataset.tripId));
   });
+
+  // 月份导航(上月/下月按钮)
+  $$('[data-cal-nav]', root).forEach(b => {
+    b.onclick = () => navigateTripMonth(b.dataset.calNav === 'next' ? 1 : -1);
+  });
+
+  // 日历左右滑动切换月份
+  const cal = root.querySelector('.trip-calendar');
+  if (cal) {
+    let startX = null, startY = null;
+    cal.addEventListener('touchstart', e => {
+      startX = e.touches[0].clientX;
+      startY = e.touches[0].clientY;
+    }, { passive: true });
+    cal.addEventListener('touchend', e => {
+      if (startX == null) return;
+      const dx = e.changedTouches[0].clientX - startX;
+      const dy = e.changedTouches[0].clientY - startY;
+      // 横向位移 > 50px 且远大于纵向位移 → 视为滑动切月
+      if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+        navigateTripMonth(dx < 0 ? 1 : -1);
+      }
+      startX = startY = null;
+    }, { passive: true });
+  }
+
+  // 列表卡片:头部点击 = 折叠/展开;详情按钮 = 打开模态
+  $$('.trip-card-head', root).forEach(el => {
+    el.onclick = (e) => {
+      const card = el.closest('.trip-card');
+      const tid = card.dataset.tripId;
+      // 当前是否已展开 = State.ui.tripCardCollapsed[tid] === false
+      // 切换:展开 → 折叠(true);折叠/未设置 → 展开(false)
+      State.ui.tripCardCollapsed[tid] = State.ui.tripCardCollapsed[tid] === false;
+      renderTrip();
+    };
+  });
+  $$('[data-act="open-trip-detail"]', root).forEach(b => {
+    b.onclick = (e) => {
+      e.stopPropagation();
+      openTripDetail(b.dataset.tripId);
+    };
+  });
 }
 
-/** 出差日历模式渲染:每条出差是一条横跨日期的彩色色条 */
-function renderTripCalendar(trips) {
-  // 决定要展示的月份范围:从最早出差所在月,到最晚出差所在月
-  if (!trips.length) return '';
-  const dates = trips.flatMap(t => [t.departureDate, t.returnDate]).filter(Boolean).sort();
-  const minDate = new Date(dates[0]);
-  const maxDate = new Date(dates[dates.length - 1]);
-  // 至少展示当前月,如果有跨月出差,展示对应月
-  const today = new Date(todayISO());
-  const startMonth = new Date(Math.min(today.getTime(), minDate.getTime()));
-  const endMonth = new Date(Math.max(today.getTime(), maxDate.getTime()));
-  startMonth.setDate(1);
-  endMonth.setMonth(endMonth.getMonth() + 1);
-  endMonth.setDate(0);
+function navigateTripMonth(delta) {
+  let m = State.ui.tripCalMonth + delta;
+  let y = State.ui.tripCalYear;
+  if (m < 0) { m = 11; y--; }
+  if (m > 11) { m = 0; y++; }
+  State.ui.tripCalYear = y;
+  State.ui.tripCalMonth = m;
+  renderTrip();
+}
 
-  let html = '';
-  const cur = new Date(startMonth);
-  while (cur <= endMonth) {
-    html += renderTripCalendarMonth(cur.getFullYear(), cur.getMonth(), trips);
-    cur.setMonth(cur.getMonth() + 1);
+/** 出差日历模式渲染:单月显示 + 左右滑动切换 */
+function renderTripCalendar(trips) {
+  // 初次访问时,默认显示今天所在月
+  if (State.ui.tripCalYear == null || State.ui.tripCalMonth == null) {
+    const today = new Date(todayISO());
+    State.ui.tripCalYear = today.getFullYear();
+    State.ui.tripCalMonth = today.getMonth();
   }
-  return html;
+  const { tripCalYear: y, tripCalMonth: m } = State.ui;
+  const monthName = `${y} 年 ${m + 1} 月`;
+  return `<div class="trip-cal-nav">
+    <button class="trip-cal-arrow" data-cal-nav="prev" aria-label="上月">‹</button>
+    <span class="trip-cal-title">${monthName}</span>
+    <button class="trip-cal-arrow" data-cal-nav="next" aria-label="下月">›</button>
+  </div>${renderTripCalendarMonth(y, m, trips)}`;
+}
+
+/** 给月内的出差按"类型 + 时间槽"分配渲染参数 */
+function _assignTripVisuals(monthTrips) {
+  // Sort by departure date ascending
+  const sorted = [...monthTrips].sort((a, b) =>
+    new Date(a.departureDate) - new Date(b.departureDate));
+
+  // 同类型 → 渐浅色阶梯
+  const typeIdx = {};
+  for (const trip of sorted) {
+    const tt = trip.tripType || 'visit';
+    if (!(tt in typeIdx)) typeIdx[tt] = 0;
+    trip._shadeIdx = typeIdx[tt]++;
+  }
+
+  // 贪心区间调度 → 每个 trip 分配一个"行槽位"(0/1/2/...),
+  // 同槽位的 trips 时间不重叠
+  const slots = [];  // slots[i] = 该槽位最后一个 trip 的 returnDate
+  for (const trip of sorted) {
+    const dep = new Date(trip.departureDate);
+    let placed = false;
+    for (let i = 0; i < slots.length; i++) {
+      if (slots[i] < dep) {
+        slots[i] = new Date(trip.returnDate);
+        trip._slot = i;
+        placed = true;
+        break;
+      }
+    }
+    if (!placed) {
+      trip._slot = slots.length;
+      slots.push(new Date(trip.returnDate));
+    }
+  }
+  return { maxSlot: slots.length, sorted };
 }
 
 function renderTripCalendarMonth(year, month, trips) {
@@ -968,15 +1115,20 @@ function renderTripCalendarMonth(year, month, trips) {
     return ret >= firstDay && dep <= lastDay;
   });
 
+  // 给每条出差分配"槽位"+ "色阶"(同类型重叠用不同浅色)
+  const { maxSlot } = _assignTripVisuals(monthTrips);
+  const SLOT_HEIGHT = 16;        // 每条色条高 16px
+  const SLOT_GAP = 2;            // 色条间距 2px
+  const HEAD_RESERVE = 22;       // 顶部留给日期数字的高度
+  const ROW_HEIGHT = HEAD_RESERVE + Math.max(maxSlot, 1) * (SLOT_HEIGHT + SLOT_GAP) + 4;
+
   // 周日开始的网格
   const cells = [];
   for (let i = 0; i < startWeekday; i++) cells.push(null);
   for (let d = 1; d <= numDays; d++) cells.push(d);
   while (cells.length % 7 !== 0) cells.push(null);
 
-  const monthName = `${year} 年 ${month + 1} 月`;
-  let html = `<div class="trip-calendar">
-    <div class="trip-cal-month">${monthName}</div>
+  let html = `<div class="trip-calendar" style="--row-h:${ROW_HEIGHT}px">
     <div class="trip-cal-weekdays">
       ${['日','一','二','三','四','五','六'].map(w => `<div>${w}</div>`).join('')}
     </div>
@@ -995,31 +1147,33 @@ function renderTripCalendarMonth(year, month, trips) {
   }
   html += `</div>`;
 
-  // 把出差色条覆盖在网格之上(每条出差占一行,跨多个 cell)
+  // 把出差色条放在日期数字下方(不覆盖数字),按槽位垂直堆叠
   if (monthTrips.length) {
-    html += `<div class="trip-cal-bars">`;
-    monthTrips.forEach((trip, idx) => {
+    html += `<div class="trip-cal-bars" style="--head:${HEAD_RESERVE}px;--slot-h:${SLOT_HEIGHT}px;--slot-gap:${SLOT_GAP}px">`;
+    monthTrips.forEach((trip) => {
       const dep = new Date(trip.departureDate);
       const ret = new Date(trip.returnDate);
       const startDay = dep < firstDay ? 1 : dep.getDate();
       const endDay = ret > lastDay ? numDays : ret.getDate();
-      // 计算第一行起始位置
       const startCellIdx = startWeekday + startDay - 1;
       const endCellIdx = startWeekday + endDay - 1;
       const startRow = Math.floor(startCellIdx / 7);
       const endRow = Math.floor(endCellIdx / 7);
       const type = TRIP_TYPES[trip.tripType || 'visit'] || TRIP_TYPES.other;
-      // 跨周时拆分成多行
+      const shadeColor = (type.shades && type.shades[trip._shadeIdx % type.shades.length]) || type.color;
+
       for (let r = startRow; r <= endRow; r++) {
         const rowStart = r === startRow ? startCellIdx % 7 : 0;
         const rowEnd = r === endRow ? endCellIdx % 7 : 6;
         const widthPct = ((rowEnd - rowStart + 1) / 7) * 100;
         const leftPct = (rowStart / 7) * 100;
+        // top = 行起点 + 头部预留(给日期数字) + 槽位偏移
         html += `<div class="trip-cal-bar"
           data-trip-id="${trip.id}"
           style="left:${leftPct}%;width:${widthPct}%;
-                 top:calc(${r} * (var(--cal-row-h)) + var(--cal-bar-offset) + ${idx * 22}px);
-                 background:${type.color};
+                 top:calc(${r} * var(--row-h) + ${HEAD_RESERVE}px + ${trip._slot} * (${SLOT_HEIGHT + SLOT_GAP}px));
+                 height:${SLOT_HEIGHT}px;
+                 background:${shadeColor};
                  ${r === startRow ? 'border-top-left-radius:6px;border-bottom-left-radius:6px;' : ''}
                  ${r === endRow ? 'border-top-right-radius:6px;border-bottom-right-radius:6px;' : ''}">
           ${r === startRow ? escapeHtml(trip.name) : ''}
@@ -1044,32 +1198,40 @@ function tripCard(trip) {
     items: tasks.filter(t => t._tripStage === s),
   }));
   const tripType = TRIP_TYPES[trip.tripType || 'visit'] || TRIP_TYPES.other;
+  // 默认折叠;只有显式标记为 false 才展开
+  const collapsed = State.ui.tripCardCollapsed[trip.id] !== false;
 
-  return `<div class="card trip-card" data-trip-id="${trip.id}"
+  return `<div class="card trip-card ${collapsed ? 'is-collapsed' : 'is-expanded'}" data-trip-id="${trip.id}"
     style="border-left:4px solid ${tripType.color}">
     <div class="trip-card-head">
-      <div>
+      <div class="flex1">
         <div class="trip-name">${escapeHtml(trip.name)}
           <span class="trip-type-pill" style="background:${tripType.soft};color:${tripType.color}">${tripType.name}</span>
         </div>
         <div class="muted small">${fmtDate(trip.departureDate)} – ${fmtDate(trip.returnDate)} · ${escapeHtml(trip.destination)}</div>
       </div>
-      <span class="trip-status status-${trip.status === '进行中' ? 'on' : trip.status === '已完成' ? 'done' : 'pending'}">${trip.status}</span>
+      <div class="trip-card-head-right">
+        <span class="trip-status status-${trip.status === '进行中' ? 'on' : trip.status === '已完成' ? 'done' : 'pending'}">${trip.status}</span>
+        <span class="trip-card-toggle">${collapsed ? '▼' : '▲'}</span>
+      </div>
     </div>
     <div class="trip-progress">
       <div class="trip-progress-bar"><div style="width:${pct}%"></div></div>
       <span class="muted small">${done} / ${total}</span>
     </div>
-    ${byStage.filter(s => s.items.length).map(s => `
-      <div class="trip-stage">
-        <div class="trip-stage-name">${s.stage}</div>
-        ${s.items.slice(0, 4).map(it => `
-          <div class="trip-task-line ${it.status==='已完成'?'done':''}">
-            <span class="check">${it.status==='已完成'?'✓':'○'}</span>
-            <span class="text">${escapeHtml(it.title)}</span>
-          </div>`).join('')}
-        ${s.items.length > 4 ? `<div class="muted small">还有 ${s.items.length - 4} 条…</div>` : ''}
-      </div>`).join('')}
+    ${!collapsed ? `
+      ${byStage.filter(s => s.items.length).map(s => `
+        <div class="trip-stage">
+          <div class="trip-stage-name">${s.stage}</div>
+          ${s.items.slice(0, 4).map(it => `
+            <div class="trip-task-line ${it.status==='已完成'?'done':''}">
+              <span class="check">${it.status==='已完成'?'✓':'○'}</span>
+              <span class="text">${escapeHtml(it.title)}</span>
+            </div>`).join('')}
+          ${s.items.length > 4 ? `<div class="muted small">还有 ${s.items.length - 4} 条…</div>` : ''}
+        </div>`).join('')}
+      <button class="btn btn-small btn-block" data-act="open-trip-detail" data-trip-id="${trip.id}" style="margin-top:8px">查看详情 / 编辑</button>
+    ` : ''}
   </div>`;
 }
 

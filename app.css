@@ -644,56 +644,89 @@ button { font-family: inherit; }
   margin-left: 6px; font-weight: 500; vertical-align: middle;
 }
 
-/* 出差日历 */
-:root {
-  --cal-row-h: 60px;
-  --cal-bar-offset: 26px;
+/* 出差日历(单月 + 月份导航 + 滑动)*/
+.trip-cal-nav {
+  display: flex; align-items: center; justify-content: space-between;
+  background: var(--c-card); border: 0.5px solid var(--c-border);
+  border-radius: 12px 12px 0 0;
+  padding: 10px 14px;
+  border-bottom: none;
 }
+.trip-cal-arrow {
+  background: transparent; border: none;
+  font-size: 22px; line-height: 1; color: var(--c-text-muted);
+  cursor: pointer; padding: 4px 12px; border-radius: 6px;
+  font-family: inherit; min-width: 40px;
+}
+.trip-cal-arrow:active { background: rgba(0,0,0,0.06); }
+.trip-cal-title { font-size: 15px; font-weight: 600; }
+
 .trip-calendar {
   background: var(--c-card); border: 0.5px solid var(--c-border);
-  border-radius: 12px; margin-bottom: 14px; padding: 12px;
+  border-top: none; border-radius: 0 0 12px 12px;
+  margin-bottom: 14px; padding: 0 12px 12px;
   position: relative;
-}
-.trip-cal-month {
-  font-size: 14px; font-weight: 600; margin-bottom: 8px;
+  user-select: none;
+  touch-action: pan-y;  /* 让浏览器知道我们要处理水平滑动 */
 }
 .trip-cal-weekdays {
   display: grid; grid-template-columns: repeat(7, 1fr);
   font-size: 11px; color: var(--c-text-muted); text-align: center;
-  margin-bottom: 4px;
+  padding: 8px 0 4px;
 }
 .trip-cal-grid {
   display: grid; grid-template-columns: repeat(7, 1fr);
   border-top: 0.5px solid var(--c-divider);
+  position: relative; /* anchor for absolute bars */
 }
 .trip-cal-cell {
-  height: var(--cal-row-h); border-right: 0.5px solid var(--c-divider);
-  border-bottom: 0.5px solid var(--c-divider); padding: 3px 5px;
+  height: var(--row-h, 60px);
+  border-right: 0.5px solid var(--c-divider);
+  border-bottom: 0.5px solid var(--c-divider);
+  padding: 3px 5px;
   position: relative; box-sizing: border-box;
 }
 .trip-cal-cell:nth-child(7n) { border-right: none; }
 .trip-cal-cell.empty { background: rgba(0,0,0,0.015); }
-.trip-cal-cell.is-today {
-  background: var(--c-primary-soft);
-}
+.trip-cal-cell.is-today { background: var(--c-primary-soft); }
 .trip-cal-cell.is-today .trip-cal-num {
   color: var(--c-primary-deep); font-weight: 700;
 }
-.trip-cal-num { font-size: 11px; color: var(--c-text); }
+.trip-cal-num {
+  font-size: 11px; color: var(--c-text);
+  position: relative; z-index: 2;  /* 数字始终在色条之上 */
+}
 .trip-cal-bars {
-  position: absolute; left: 12px; right: 12px;
-  top: calc(12px + 18px + 6px + 0.5px); bottom: 12px;
-  pointer-events: none;
+  position: absolute; left: 0; right: 0;
+  top: 0; bottom: 0;
+  pointer-events: none; z-index: 1;
 }
 .trip-cal-bar {
-  position: absolute; height: 18px;
+  position: absolute;
   color: #fff; font-size: 10px; font-weight: 600;
-  padding: 2px 6px; box-sizing: border-box;
+  padding: 1px 6px; box-sizing: border-box;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   pointer-events: auto; cursor: pointer;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.15);
+  line-height: 14px;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.12);
 }
-.trip-cal-bar:hover { opacity: 0.9; }
+.trip-cal-bar:hover { opacity: 0.85; }
+
+/* 出差列表卡片 - 折叠/展开 */
+.trip-card-head {
+  display: flex; align-items: flex-start; gap: 8px;
+  cursor: pointer;
+}
+.trip-card-head-right {
+  display: flex; align-items: center; gap: 8px;
+  flex-shrink: 0;
+}
+.trip-card-toggle {
+  font-size: 11px; color: var(--c-text-muted);
+}
+.trip-card.is-collapsed .trip-progress {
+  margin-bottom: 0;
+}
 
 /* ---- 锁屏(端到端加密登录)---- */
 #lock-screen {
