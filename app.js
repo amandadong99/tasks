@@ -55,8 +55,27 @@ const KEY = {
   persons: 'amanda.persons',
   trips: 'amanda.trips',
   templates: 'amanda.tripTemplates',
+  notes: 'amanda.notes',
   meta: 'amanda.meta',
   docKey: 'amanda.docKey',
+};
+
+const NOTE_CATEGORIES = {
+  yellow: { name: '客户笔记', bg: '#FEF7CD', accent: '#B45309', soft: '#FFFBEB' },
+  blue:   { name: '工作思路', bg: '#DBEAFE', accent: '#1E40AF', soft: '#EFF6FF' },
+  green:  { name: '学习参考', bg: '#D1FAE5', accent: '#065F46', soft: '#ECFDF5' },
+  pink:   { name: '灵感想法', bg: '#FCE7F3', accent: '#9D174D', soft: '#FDF2F8' },
+  purple: { name: '团队管理', bg: '#EDE9FE', accent: '#5B21B6', soft: '#F5F3FF' },
+  gray:   { name: '其他',     bg: '#E5E7EB', accent: '#374151', soft: '#F9FAFB' },
+};
+const NOTE_CAT_KEYS = Object.keys(NOTE_CATEGORIES);
+
+const TRIP_TYPES = {
+  expo:    { name: '展会',     color: '#F59E0B', soft: '#FEF3C7' },
+  visit:   { name: '拜访客户', color: '#7C3AED', soft: '#EDE9FE' },
+  inspect: { name: '考察',     color: '#10B981', soft: '#D1FAE5' },
+  travel:  { name: '旅行/休假', color: '#EC4899', soft: '#FCE7F3' },
+  other:   { name: '其他',     color: '#6B7280', soft: '#F3F4F6' },
 };
 
 const Store = {
@@ -229,7 +248,9 @@ const State = {
   persons: [],
   trips: [],
   templates: [],
-  ui: { tab: 'today', peopleFilter: 'all', rhythmTab: 'frequency' },
+  notes: [],
+  ui: { tab: 'today', peopleFilter: 'all', rhythmTab: 'frequency',
+        notesFilter: 'all', tripView: 'calendar' },
 };
 
 function initData() {
@@ -239,16 +260,19 @@ function initData() {
     State.tasks = seedTasks();
     State.templates = seedTemplates();
     State.trips = [];
+    State.notes = [];
     Store.save(KEY.persons, State.persons);
     Store.save(KEY.tasks, State.tasks);
     Store.save(KEY.templates, State.templates);
     Store.save(KEY.trips, State.trips);
+    Store.save(KEY.notes, State.notes);
     Store.save(KEY.meta, { seeded: true, seededAt: new Date().toISOString(), version: '1.0' });
   } else {
     State.persons = Store.load(KEY.persons, []);
     State.tasks = Store.load(KEY.tasks, []);
     State.templates = Store.load(KEY.templates, seedTemplates());
     State.trips = Store.load(KEY.trips, []);
+    State.notes = Store.load(KEY.notes, []);
   }
   // 自动生成日期型任务的当日实例
   generateDateBasedInstances();
@@ -281,10 +305,10 @@ function migrateTripTemplates() {
 }
 
 /* 持久化 + Firebase 同步 */
-const _syncSnapshot = { tasks: null, persons: null, trips: null, templates: null };
+const _syncSnapshot = { tasks: null, persons: null, trips: null, templates: null, notes: null };
 
 function captureSyncSnapshot() {
-  for (const k of ['tasks', 'persons', 'trips', 'templates']) {
+  for (const k of ['tasks', 'persons', 'trips', 'templates', 'notes']) {
     _syncSnapshot[k] = JSON.stringify(State[k]);
   }
 }
@@ -319,6 +343,7 @@ function persistTasks() { Store.save(KEY.tasks, State.tasks); _syncToFirebase('t
 function persistPersons() { Store.save(KEY.persons, State.persons); _syncToFirebase('persons'); }
 function persistTrips() { Store.save(KEY.trips, State.trips); _syncToFirebase('trips'); }
 function persistTemplates() { Store.save(KEY.templates, State.templates); _syncToFirebase('templates'); }
+function persistNotes() { Store.save(KEY.notes, State.notes); _syncToFirebase('notes'); }
 
 /* ---------------------------------------------------------------------
  * 4. 业务逻辑工具
@@ -338,6 +363,18 @@ function getOverdueDays(task) {
 }
 function getPersonById(id) { return State.persons.find(p => p.id === id); }
 function getPersonName(id) { const p = getPersonById(id); return p ? p.name : '?'; }
+
+/** 按时间排序:有时间的在前(按 HH:MM 升序),无时间的在后保持原顺序 */
+function sortByTime(tasks) {
+  return [...tasks].sort((a, b) => {
+    const ta = a.dueTime || '';
+    const tb = b.dueTime || '';
+    if (ta && !tb) return -1;
+    if (!ta && tb) return 1;
+    if (ta && tb) return ta.localeCompare(tb);
+    return 0;
+  });
+}
 
 const DOMAIN_COLOR = {
   '客户与销售': '#7C3AED',  // 紫色
@@ -463,7 +500,7 @@ function renderToday() {
 
   // 三个领域分组(浅色背景"面板" + 深色分割线)
   for (const d of DOMAINS) {
-    const items = todayTasks.filter(t => t.domain === d);
+    const items = sortByTime(todayTasks.filter(t => t.domain === d));
     if (!items.length) continue;
     html += `<div class="section section-domain" style="background:${DOMAIN_BG[d]}">
       <div class="section-bar" style="background:${DOMAIN_COLOR[d]}"></div>
@@ -507,7 +544,7 @@ function renderWeek() {
     const d = new Date(monday);
     d.setDate(monday.getDate() + i);
     const iso = d.toISOString().slice(0, 10);
-    const items = State.tasks.filter(t => t.dueDate === iso && t.status !== '已完成');
+    const items = sortByTime(State.tasks.filter(t => t.dueDate === iso && t.status !== '已完成'));
     const isPast = iso < todayISO();
     const isToday = iso === todayISO();
     const labels = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
@@ -700,6 +737,136 @@ function rhythmDateCard(t) {
 }
 
 /* ---------------------------------------------------------------------
+ * 9b. 视图:笔记
+ * ------------------------------------------------------------------ */
+function renderNotes() {
+  const root = $('#notes-content');
+  const filterBar = $('#notes-filter');
+
+  // 重新渲染分类筛选条
+  filterBar.innerHTML = `<button class="chip ${State.ui.notesFilter === 'all' ? 'active' : ''}" data-notes-cat="all">全部</button>`
+    + NOTE_CAT_KEYS.map(k => `<button class="chip ${State.ui.notesFilter === k ? 'active' : ''}" data-notes-cat="${k}" style="background:${NOTE_CATEGORIES[k].soft};color:${NOTE_CATEGORIES[k].accent}">${NOTE_CATEGORIES[k].name}</button>`).join('');
+
+  let notes = [...State.notes];
+  if (State.ui.notesFilter !== 'all') {
+    notes = notes.filter(n => n.category === State.ui.notesFilter);
+  }
+  // 置顶 + 按最后更新时间倒序
+  notes.sort((a, b) => {
+    if ((b.pinned ? 1 : 0) !== (a.pinned ? 1 : 0)) return (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0);
+    return (b.updatedAt || b.createdAt || '').localeCompare(a.updatedAt || a.createdAt || '');
+  });
+
+  if (!notes.length) {
+    root.innerHTML = `<div class="empty">
+      <div class="empty-emoji">📝</div>
+      <div class="empty-title">${State.ui.notesFilter === 'all' ? '还没有笔记' : '此分类暂无笔记'}</div>
+      <div class="empty-sub">点右下角 + 新建一条笔记</div>
+    </div>`;
+    bindNotesFilter();
+    return;
+  }
+
+  root.innerHTML = `<div class="notes-grid">${notes.map(noteCard).join('')}</div>`;
+  bindNotesFilter();
+  $$('.note-card', root).forEach(el => {
+    el.onclick = () => openNoteModal(el.dataset.nid);
+  });
+}
+
+function bindNotesFilter() {
+  $$('#notes-filter .chip').forEach(c => {
+    c.onclick = () => {
+      State.ui.notesFilter = c.dataset.notesCat;
+      renderNotes();
+    };
+  });
+}
+
+function noteCard(n) {
+  const cat = NOTE_CATEGORIES[n.category] || NOTE_CATEGORIES.gray;
+  const date = (n.updatedAt || n.createdAt || '').slice(5, 10).replace('-', '/');
+  const preview = (n.content || '').replace(/\n/g, ' ').slice(0, 100);
+  return `<div class="note-card" data-nid="${n.id}" style="background:${cat.bg}">
+    <div class="note-head">
+      <span class="note-date" style="color:${cat.accent}">📅 ${date} · ${cat.name}</span>
+      ${n.pinned ? '<span class="note-pin">📌</span>' : ''}
+    </div>
+    <div class="note-title">${escapeHtml(n.title || '(无标题)')}</div>
+    <div class="note-preview">${escapeHtml(preview) || '<span class="muted">空笔记</span>'}</div>
+  </div>`;
+}
+
+function openNoteModal(noteId) {
+  const isNew = !noteId;
+  const n = isNew
+    ? { id: uuid(), title: '', content: '', category: 'yellow', pinned: false,
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
+    : State.notes.find(x => x.id === noteId);
+  if (!n) return;
+
+  const colorPicker = NOTE_CAT_KEYS.map(k => {
+    const c = NOTE_CATEGORIES[k];
+    return `<button type="button" class="note-color-chip ${n.category === k ? 'active' : ''}"
+      data-cat="${k}" style="background:${c.bg};color:${c.accent};border-color:${n.category === k ? c.accent : 'transparent'}">${c.name}</button>`;
+  }).join('');
+
+  openModal({
+    title: isNew ? '新建笔记' : '编辑笔记',
+    body: `
+      <label>标题 <input id="note-title" value="${escapeHtml(n.title)}" placeholder="一句话标题"></label>
+      <label>分类 / 颜色
+        <div class="note-colors">${colorPicker}</div>
+      </label>
+      <label class="check-row">
+        <input type="checkbox" id="note-pin" ${n.pinned ? 'checked' : ''}>
+        置顶笔记
+      </label>
+      <label>正文 <textarea id="note-content" rows="10" style="resize:vertical">${escapeHtml(n.content)}</textarea></label>
+      <div class="muted small">
+        创建于 ${(n.createdAt || '').slice(0, 16).replace('T', ' ')}<br>
+        ${!isNew && n.updatedAt ? '最后修改 ' + n.updatedAt.slice(0, 16).replace('T', ' ') : ''}
+      </div>
+    `,
+    actions: [
+      { label: '取消', onClick: closeModal },
+      ...(!isNew ? [{ label: '删除', danger: true, onClick: () => {
+        if (!confirm('确定删除此笔记?')) return;
+        State.notes = State.notes.filter(x => x.id !== noteId);
+        persistNotes(); closeModal(); renderNotes(); toast('已删除');
+      }}] : []),
+      { label: '保存', primary: true, onClick: () => {
+        n.title = $('#note-title').value.trim();
+        n.content = $('#note-content').value;
+        n.pinned = $('#note-pin').checked;
+        n.updatedAt = new Date().toISOString();
+        if (!n.title && !n.content) { toast('标题或正文至少填一项'); return; }
+        if (isNew) State.notes.push(n);
+        else {
+          const idx = State.notes.findIndex(x => x.id === n.id);
+          if (idx >= 0) State.notes[idx] = n;
+        }
+        persistNotes(); closeModal(); renderNotes();
+        toast(isNew ? '已新建' : '已保存');
+      }},
+    ],
+  });
+
+  // 颜色选择器交互
+  $$('.note-color-chip', $('#modal-root')).forEach(b => {
+    b.onclick = (e) => {
+      e.preventDefault();
+      n.category = b.dataset.cat;
+      $$('.note-color-chip', $('#modal-root')).forEach(x => {
+        const cat = NOTE_CATEGORIES[x.dataset.cat];
+        x.classList.toggle('active', x.dataset.cat === n.category);
+        x.style.borderColor = x.dataset.cat === n.category ? cat.accent : 'transparent';
+      });
+    };
+  });
+}
+
+/* ---------------------------------------------------------------------
  * 9. 视图:出差
  * ------------------------------------------------------------------ */
 function renderTrip() {
@@ -710,9 +877,19 @@ function renderTrip() {
     return new Date(b.departureDate) - new Date(a.departureDate);
   });
 
+  // 顶部工具条 + 视图切换
   let html = `<div class="trip-toolbar">
     <button class="btn btn-primary" data-act="new-trip">+ 新建出差</button>
     <button class="btn btn-ghost btn-small" data-act="manage-templates">管理模板</button>
+  </div>
+  <div class="trip-view-toggle">
+    <button class="chip ${State.ui.tripView === 'calendar' ? 'active' : ''}" data-tv="calendar">📅 日历</button>
+    <button class="chip ${State.ui.tripView === 'list' ? 'active' : ''}" data-tv="list">📋 列表</button>
+  </div>
+  <div class="trip-type-legend">
+    ${Object.entries(TRIP_TYPES).map(([k, v]) =>
+      `<span class="trip-type-tag" style="background:${v.soft};color:${v.color}"><span class="dot" style="background:${v.color}"></span>${v.name}</span>`
+    ).join('')}
   </div>`;
 
   if (!trips.length) {
@@ -721,6 +898,8 @@ function renderTrip() {
       <div class="empty-title">还没有出差行程</div>
       <div class="empty-sub">点击 + 新建出差,系统按出发日期自动倒推所有提醒</div>
     </div>`;
+  } else if (State.ui.tripView === 'calendar') {
+    html += renderTripCalendar(trips);
   } else {
     html += trips.map(tripCard).join('');
   }
@@ -728,9 +907,121 @@ function renderTrip() {
 
   $('[data-act="new-trip"]')?.addEventListener('click', () => openTripModal());
   $('[data-act="manage-templates"]')?.addEventListener('click', () => openTemplateManager());
+  $$('.trip-view-toggle .chip').forEach(c => {
+    c.onclick = () => {
+      State.ui.tripView = c.dataset.tv;
+      renderTrip();
+    };
+  });
   $$('.trip-card', root).forEach(el => {
     el.addEventListener('click', () => openTripDetail(el.dataset.tripId));
   });
+  $$('.trip-cal-bar', root).forEach(el => {
+    el.addEventListener('click', () => openTripDetail(el.dataset.tripId));
+  });
+}
+
+/** 出差日历模式渲染:每条出差是一条横跨日期的彩色色条 */
+function renderTripCalendar(trips) {
+  // 决定要展示的月份范围:从最早出差所在月,到最晚出差所在月
+  if (!trips.length) return '';
+  const dates = trips.flatMap(t => [t.departureDate, t.returnDate]).filter(Boolean).sort();
+  const minDate = new Date(dates[0]);
+  const maxDate = new Date(dates[dates.length - 1]);
+  // 至少展示当前月,如果有跨月出差,展示对应月
+  const today = new Date(todayISO());
+  const startMonth = new Date(Math.min(today.getTime(), minDate.getTime()));
+  const endMonth = new Date(Math.max(today.getTime(), maxDate.getTime()));
+  startMonth.setDate(1);
+  endMonth.setMonth(endMonth.getMonth() + 1);
+  endMonth.setDate(0);
+
+  let html = '';
+  const cur = new Date(startMonth);
+  while (cur <= endMonth) {
+    html += renderTripCalendarMonth(cur.getFullYear(), cur.getMonth(), trips);
+    cur.setMonth(cur.getMonth() + 1);
+  }
+  return html;
+}
+
+function renderTripCalendarMonth(year, month, trips) {
+  const firstDay = new Date(year, month, 1);
+  const lastDay = new Date(year, month + 1, 0);
+  const startWeekday = firstDay.getDay(); // 0 = Sunday
+  const numDays = lastDay.getDate();
+  const todayStr = todayISO();
+
+  // 收集该月有重叠的出差
+  const monthTrips = trips.filter(t => {
+    const dep = new Date(t.departureDate);
+    const ret = new Date(t.returnDate);
+    return ret >= firstDay && dep <= lastDay;
+  });
+
+  // 周日开始的网格
+  const cells = [];
+  for (let i = 0; i < startWeekday; i++) cells.push(null);
+  for (let d = 1; d <= numDays; d++) cells.push(d);
+  while (cells.length % 7 !== 0) cells.push(null);
+
+  const monthName = `${year} 年 ${month + 1} 月`;
+  let html = `<div class="trip-calendar">
+    <div class="trip-cal-month">${monthName}</div>
+    <div class="trip-cal-weekdays">
+      ${['日','一','二','三','四','五','六'].map(w => `<div>${w}</div>`).join('')}
+    </div>
+    <div class="trip-cal-grid">`;
+
+  for (const day of cells) {
+    if (day === null) {
+      html += `<div class="trip-cal-cell empty"></div>`;
+      continue;
+    }
+    const dateStr = `${year}-${String(month+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+    const isToday = dateStr === todayStr;
+    html += `<div class="trip-cal-cell ${isToday ? 'is-today' : ''}">
+      <div class="trip-cal-num">${day}</div>
+    </div>`;
+  }
+  html += `</div>`;
+
+  // 把出差色条覆盖在网格之上(每条出差占一行,跨多个 cell)
+  if (monthTrips.length) {
+    html += `<div class="trip-cal-bars">`;
+    monthTrips.forEach((trip, idx) => {
+      const dep = new Date(trip.departureDate);
+      const ret = new Date(trip.returnDate);
+      const startDay = dep < firstDay ? 1 : dep.getDate();
+      const endDay = ret > lastDay ? numDays : ret.getDate();
+      // 计算第一行起始位置
+      const startCellIdx = startWeekday + startDay - 1;
+      const endCellIdx = startWeekday + endDay - 1;
+      const startRow = Math.floor(startCellIdx / 7);
+      const endRow = Math.floor(endCellIdx / 7);
+      const type = TRIP_TYPES[trip.tripType || 'visit'] || TRIP_TYPES.other;
+      // 跨周时拆分成多行
+      for (let r = startRow; r <= endRow; r++) {
+        const rowStart = r === startRow ? startCellIdx % 7 : 0;
+        const rowEnd = r === endRow ? endCellIdx % 7 : 6;
+        const widthPct = ((rowEnd - rowStart + 1) / 7) * 100;
+        const leftPct = (rowStart / 7) * 100;
+        html += `<div class="trip-cal-bar"
+          data-trip-id="${trip.id}"
+          style="left:${leftPct}%;width:${widthPct}%;
+                 top:calc(${r} * (var(--cal-row-h)) + var(--cal-bar-offset) + ${idx * 22}px);
+                 background:${type.color};
+                 ${r === startRow ? 'border-top-left-radius:6px;border-bottom-left-radius:6px;' : ''}
+                 ${r === endRow ? 'border-top-right-radius:6px;border-bottom-right-radius:6px;' : ''}">
+          ${r === startRow ? escapeHtml(trip.name) : ''}
+        </div>`;
+      }
+    });
+    html += `</div>`;
+  }
+
+  html += `</div>`;
+  return html;
 }
 
 function tripCard(trip) {
@@ -743,11 +1034,15 @@ function tripCard(trip) {
     stage: s,
     items: tasks.filter(t => t._tripStage === s),
   }));
+  const tripType = TRIP_TYPES[trip.tripType || 'visit'] || TRIP_TYPES.other;
 
-  return `<div class="card trip-card" data-trip-id="${trip.id}">
+  return `<div class="card trip-card" data-trip-id="${trip.id}"
+    style="border-left:4px solid ${tripType.color}">
     <div class="trip-card-head">
       <div>
-        <div class="trip-name">${escapeHtml(trip.name)}</div>
+        <div class="trip-name">${escapeHtml(trip.name)}
+          <span class="trip-type-pill" style="background:${tripType.soft};color:${tripType.color}">${tripType.name}</span>
+        </div>
         <div class="muted small">${fmtDate(trip.departureDate)} – ${fmtDate(trip.returnDate)} · ${escapeHtml(trip.destination)}</div>
       </div>
       <span class="trip-status status-${trip.status === '进行中' ? 'on' : trip.status === '已完成' ? 'done' : 'pending'}">${trip.status}</span>
@@ -772,10 +1067,12 @@ function tripCard(trip) {
 function openTripModal(existing) {
   const t = existing || {
     name: '', destination: '', departureDate: '', returnDate: '',
-    templateId: 'tpl-intl-standard', autoVideoMeeting: true,
+    templateId: 'tpl-intl-standard', tripType: 'visit', autoVideoMeeting: true,
   };
   const tplOptions = State.templates.map(tp =>
     `<option value="${tp.id}" ${tp.id === t.templateId ? 'selected' : ''}>${escapeHtml(tp.name)}</option>`).join('');
+  const typeOptions = Object.entries(TRIP_TYPES).map(([k, v]) =>
+    `<option value="${k}" ${k === (t.tripType||'visit') ? 'selected' : ''}>${v.name}</option>`).join('');
 
   openModal({
     title: existing ? '编辑出差' : '新建出差',
@@ -786,12 +1083,15 @@ function openTripModal(existing) {
         <label class="flex1">出发日期<input id="trip-dep" type="date" value="${t.departureDate}"></label>
         <label class="flex1">返程日期<input id="trip-ret" type="date" value="${t.returnDate}"></label>
       </div>
-      <label>套用模板<select id="trip-tpl">${tplOptions}</select></label>
+      <div class="row">
+        <label class="flex1">出差类型<select id="trip-type">${typeOptions}</select></label>
+        <label class="flex1">套用模板<select id="trip-tpl">${tplOptions}</select></label>
+      </div>
       <label class="check-row">
         <input type="checkbox" id="trip-video" ${t.autoVideoMeeting ? 'checked' : ''}>
         出差期间会议自动改视频
       </label>
-      <div class="muted small">保存后系统按出发日期自动倒推派生任务。</div>`,
+      <div class="muted small">保存后系统按出发日期自动倒推派生任务(包含"出发前1天备份电脑数据"提醒)。</div>`,
     actions: [
       { label: '取消', onClick: closeModal },
       { label: '保存并派生任务', primary: true, onClick: () => {
@@ -801,6 +1101,7 @@ function openTripModal(existing) {
         trip.departureDate = $('#trip-dep').value;
         trip.returnDate = $('#trip-ret').value;
         trip.templateId = $('#trip-tpl').value;
+        trip.tripType = $('#trip-type').value;
         trip.autoVideoMeeting = $('#trip-video').checked;
         if (!trip.name || !trip.departureDate || !trip.returnDate) {
           toast('请填写名称与日期'); return;
@@ -943,6 +1244,7 @@ function taskCard(t, opt = {}) {
       <div class="task-meta">
         ${typeBadge}
         ${personLabels ? `<span class="task-person">${escapeHtml(personLabels)}</span>` : ''}
+        ${t.dueTime ? `<span class="task-time">${escapeHtml(t.dueTime)}</span>` : ''}
         ${t.dueDate ? `<span class="task-due">${fmtDate(t.dueDate)}</span>` : ''}
         ${overdue ? `<span class="task-overdue">逾期 ${overdueDays} 天</span>` : ''}
         ${t._videoBadge ? '<span class="badge-video">📹</span>' : ''}
@@ -1154,7 +1456,10 @@ function openTaskModal(existing, defaults = {}) {
       </div>
 
       <div id="ti-single-wrap" ${isFreq||isDate?'hidden':''}>
-        <label>下次行动日期 <input id="ti-due" type="date" value="${t.dueDate||''}"></label>
+        <div class="row">
+          <label class="flex1">日期 <input id="ti-due" type="date" value="${t.dueDate||''}"></label>
+          <label class="flex1">时间(选填) <input id="ti-due-time" type="time" value="${t.dueTime||''}"></label>
+        </div>
       </div>
 
       <div id="ti-freq-wrap" ${isFreq?'':'hidden'}>
@@ -1238,16 +1543,17 @@ function saveTaskFromModal(orig, isEdit) {
     t.frequencyPeriod = $('#ti-period').value;
     t.overdueMultiplier = +$('#ti-mult').value || 1.5;
     if (!t.lastDoneAt) t.lastDoneAt = todayISO();
-    delete t.dueDate;
+    delete t.dueDate; delete t.dueTime;
   } else if (t.type === '节奏-日期型') {
     t.datePattern = $('#ti-pattern').value;
     t.weekday = +$('#ti-weekday').value;
     t.monthDay = +$('#ti-monthday').value;
     t.timeOfDay = $('#ti-time').value;
     t.autoVideoOnTrip = $('#ti-video').checked;
-    delete t.dueDate;
+    delete t.dueDate; delete t.dueTime;
   } else {
     t.dueDate = $('#ti-due').value || null;
+    t.dueTime = $('#ti-due-time').value || null;
   }
 
   if (!t.title) { toast('请填写任务名'); return; }
@@ -1327,6 +1633,7 @@ function renderCurrentView() {
   else if (tab === 'people') renderPeople();
   else if (tab === 'rhythm') renderRhythm();
   else if (tab === 'trip') renderTrip();
+  else if (tab === 'notes') renderNotes();
 }
 
 function renderAll() {
@@ -1679,8 +1986,12 @@ function init() {
   // Tab 切换
   $$('.tab').forEach(b => b.onclick = () => switchTab(b.dataset.tab));
 
-  // FAB 新建
-  $('#fab').onclick = () => openTaskModal();
+  // FAB 新建(根据当前 Tab 决定新建什么)
+  $('#fab').onclick = () => {
+    if (State.ui.tab === 'notes') openNoteModal();
+    else if (State.ui.tab === 'trip') openTripModal();
+    else openTaskModal();
+  };
 
   // 设置
   $('#settings-btn').onclick = openSettings;
