@@ -198,7 +198,7 @@ function seedTemplates() {
         { title: '定机票【便宜价窗口】', stage: '出行准备', daysBeforeDeparture: 30, alertLevel: '琥珀提醒' },
         { title: '定机票【最后窗口】', stage: '出行准备', daysBeforeDeparture: 20, alertLevel: '红色警告' },
         { title: '定酒店', stage: '出行准备', daysBeforeDeparture: 14, alertLevel: '普通' },
-        { title: '准备宣传册 + 压机样板', stage: '出行准备', daysBeforeDeparture: 10, alertLevel: '普通' },
+        { title: '准备宣传册 + 名片 + 样板 + 礼品', stage: '出行准备', daysBeforeDeparture: 10, alertLevel: '普通' },
         { title: '客户礼物', stage: '出行准备', daysBeforeDeparture: 7, alertLevel: '普通' },
         { title: '备份电脑本地盘数据到移动硬盘(防出差中电脑丢失)', stage: '出行准备', daysBeforeDeparture: 1, alertLevel: '琥珀提醒' },
         { title: '打印行程单、确认接机', stage: '出行准备', daysBeforeDeparture: 2, alertLevel: '普通' },
@@ -298,9 +298,18 @@ function migrateTripTemplates() {
       changed = true;
     }
   }
+  // 旧文案 → 新文案(已存在的模板也升级)
+  for (const tpl of State.templates) {
+    for (const task of tpl.tasks) {
+      if (task.title === '准备宣传册 + 压机样板') {
+        task.title = '准备宣传册 + 名片 + 样板 + 礼品';
+        changed = true;
+      }
+    }
+  }
   if (changed) {
     persistTemplates();
-    console.info('[Migrate] 已为现有出差模板补上"备份数据"任务');
+    console.info('[Migrate] 出差模板已升级');
   }
 }
 
@@ -1556,6 +1565,14 @@ function saveTaskFromModal(orig, isEdit) {
     t.dueTime = $('#ti-due-time').value || null;
   }
 
+  // 计算未加密的 dueAt 时间戳(供 Cloud Function 服务端定时扫描)
+  // dueAt 是任务到期那一刻的 ISO,提前 5 分钟推送
+  if (t.dueDate && t.dueTime) {
+    t.dueAt = new Date(`${t.dueDate}T${t.dueTime}:00`).toISOString();
+  } else {
+    delete t.dueAt;
+  }
+
   if (!t.title) { toast('请填写任务名'); return; }
 
   if (!isEdit) {
@@ -1761,8 +1778,12 @@ function openSettings() {
 async function requestNotificationPermission() {
   if (!('Notification' in window)) return alert('当前浏览器不支持通知');
 
-  // 已授权 → 跑一次完整诊断
+  // 已授权 → 跑一次完整诊断 + 同步推送订阅
   if (Notification.permission === 'granted') {
+    if (window.AmandaFirebase?.ready) {
+      const r = await window.AmandaFirebase.subscribePush();
+      if (r.ok) toast('推送订阅已就绪');
+    }
     runBadgeDiagnostic();
     return;
   }
@@ -1770,7 +1791,11 @@ async function requestNotificationPermission() {
   // 未授权 → 请求授权
   const p = await Notification.requestPermission();
   if (p === 'granted') {
-    new Notification('任务指挥台', { body: '通知已开启,正在测试主屏徽章…' });
+    new Notification('任务指挥台', { body: '通知已开启,正在配置推送…' });
+    if (window.AmandaFirebase?.ready) {
+      const r = await window.AmandaFirebase.subscribePush();
+      if (r.ok) toast('推送订阅已就绪 — Cloud Function 部署后任务到期自动提醒');
+    }
     setTimeout(runBadgeDiagnostic, 500);
   } else {
     alert('授权被拒绝。如要重新授权,需要在 iPhone 设置 → 通知 → 任务指挥台 中重新开启,或删除主屏图标重新添加。');

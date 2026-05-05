@@ -35,6 +35,9 @@ window.AmandaFirebase = {
     messagingSenderId: "200292789463",
     appId: "1:200292789463:web:131697b8d7a87fe82e1492",
   },
+  // VAPID 公钥(部署 Cloud Function 时会生成,这里先填占位符,部署后替换)
+  // 详见 functions/README.md
+  VAPID_PUBLIC_KEY: "",
   /* ======================== */
 
   // 内部状态
@@ -299,7 +302,14 @@ window.AmandaFirebase = {
   async _setEncrypted(stateKey, item) {
     const { setDoc } = this._modules;
     const { iv, ct } = await this.Crypto.encrypt(this.cryptoKey, JSON.stringify(item));
-    await setDoc(this._doc(stateKey, item.id), { iv, ct, _syncedAt: Date.now() });
+    // 把 dueAt(明文)单独留出来,供 Cloud Function 服务端按时间查询
+    // 服务端只能看到何时有任务,看不到任务内容(标题/客户名/备注仍加密)
+    const doc = { iv, ct, _syncedAt: Date.now() };
+    if (stateKey === 'tasks' && item.dueAt) {
+      doc.dueAt = item.dueAt;
+      doc.dueAtTs = new Date(item.dueAt).getTime(); // 数字时间戳便于排序/查询
+    }
+    await setDoc(this._doc(stateKey, item.id), doc);
   },
 
   async pushItem(stateKey, item) {
@@ -318,6 +328,59 @@ window.AmandaFirebase = {
     this.unsubs.forEach(u => { try { u(); } catch {} });
     this.unsubs = []; this.ready = false;
     this.cryptoKey = null; this.userId = null;
+  },
+
+  /**
+   * 注册 Web Push 订阅:在 Service Worker 上订阅推送,
+   * 然后把 endpoint 信息存到 Firestore /users/{userId}/pushSubs/{deviceId}。
+   * Cloud Function 拿这些 endpoint 用 web-push 库发推送。
+   */
+  async subscribePush() {
+    if (!this.ready || !this.VAPID_PUBLIC_KEY) {
+      console.info('[Push] 跳过:Firebase 未就绪或未配置 VAPID');
+      return { ok: false, reason: 'no-config' };
+    }
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+      return { ok: false, reason: 'unsupported' };
+    }
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      let sub = await reg.pushManager.getSubscription();
+      if (!sub) {
+        sub = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: this._urlB64ToUint8(this.VAPID_PUBLIC_KEY),
+        });
+      }
+      // 用稳定的 device id(取 endpoint 哈希)
+      const deviceId = await this._sha256Short(sub.endpoint);
+      const { setDoc, doc } = this._modules;
+      const ref = doc(this.db, 'users', this.userId, 'pushSubs', deviceId);
+      await setDoc(ref, {
+        endpoint: sub.endpoint,
+        keys: sub.toJSON().keys,
+        ua: navigator.userAgent.slice(0, 200),
+        createdAt: Date.now(),
+        platform: /iPhone|iPad|iPod/.test(navigator.userAgent) ? 'ios' :
+                  /Android/.test(navigator.userAgent) ? 'android' : 'desktop',
+      });
+      console.info('[Push] 订阅成功 deviceId=' + deviceId.slice(0, 8) + '...');
+      return { ok: true, deviceId };
+    } catch (err) {
+      console.error('[Push] 订阅失败:', err);
+      return { ok: false, reason: 'error', error: err };
+    }
+  },
+
+  _urlB64ToUint8(b64) {
+    const padding = '='.repeat((4 - b64.length % 4) % 4);
+    const base64 = (b64 + padding).replace(/-/g, '+').replace(/_/g, '/');
+    const raw = atob(base64);
+    return Uint8Array.from(raw, c => c.charCodeAt(0));
+  },
+  async _sha256Short(s) {
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
+    return Array.from(new Uint8Array(buf)).slice(0, 12).map(b => b.toString(16).padStart(2, '0')).join('');
   },
 
   _showStatus(msg, isError) {

@@ -1,0 +1,10 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 个人任务工具:用 docKey 派生的 userId 路径自我隔离
+    // 数据加密存储,服务端只能看到时间戳(dueAtTs)
+    match /users/{userId}/{coll=**} {
+      allow read, write: if true;
+    }
+  }
+}
