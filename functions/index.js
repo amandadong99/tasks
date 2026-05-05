@@ -71,18 +71,25 @@ exports.sendTaskReminders = onSchedule(
       // 防重发:已经推过的任务就跳过
       if (data._notifiedAt) { skipped++; continue; }
 
-      // 推送内容(通用文案,匿名)
+      // 推送 payload:
+      // - 如果任务有加密标题(titleEnc),把它原样塞进 payload,SW 端本地解密后显示真实标题
+      // - Apple/Google 推送服务器、Cloud Function 自身只看到密文
       const dueDate = new Date(data.dueAt);
       const localTime = dueDate.toLocaleTimeString('zh-CN', {
         hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Shanghai',
       });
-      const payload = JSON.stringify({
+      const payloadObj = {
         title: '📋 任务即将到期',
         body: `${localTime} 有任务 — 打开 App 查看详情`,
         tag: 'task-' + taskId,
         url: './index.html#today',
         urgent: true,
-      });
+        dueTime: localTime,
+      };
+      if (data.titleEnc && data.titleEnc.iv && data.titleEnc.ct) {
+        payloadObj.titleEnc = data.titleEnc;
+      }
+      const payload = JSON.stringify(payloadObj);
 
       // 找该用户的所有 pushSubs
       const subsSnap = await db.collection('users').doc(userId)

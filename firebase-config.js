@@ -125,6 +125,9 @@ window.AmandaFirebase = {
       this.cryptoKey = await this.Crypto.deriveKey(pass);
       this.userId = await this.Crypto.deriveUserId(pass);
 
+      // 把加密钥也存到 IndexedDB,Service Worker 收到 push 时能用它解密标题
+      await this._storeCryptoKeyInIDB(this.cryptoKey, this.userId);
+
       // 加载 Firebase SDK
       const [appMod, fsMod] = await Promise.all([
         import('https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js'),
@@ -305,9 +308,17 @@ window.AmandaFirebase = {
     // 把 dueAt(明文)单独留出来,供 Cloud Function 服务端按时间查询
     // 服务端只能看到何时有任务,看不到任务内容(标题/客户名/备注仍加密)
     const doc = { iv, ct, _syncedAt: Date.now() };
-    if (stateKey === 'tasks' && item.dueAt) {
-      doc.dueAt = item.dueAt;
-      doc.dueAtTs = new Date(item.dueAt).getTime(); // 数字时间戳便于排序/查询
+    if (stateKey === 'tasks') {
+      if (item.dueAt) {
+        doc.dueAt = item.dueAt;
+        doc.dueAtTs = new Date(item.dueAt).getTime();
+      }
+      // 单独再加密标题(小 payload),Cloud Function 推送时把这个 ct 直接塞进通知
+      // SW 收到推送后,用 IndexedDB 里的密钥本地解密 → iPhone 锁屏看到真实标题
+      // Apple/Google 推送服务器始终只看到密文
+      if (item.title) {
+        doc.titleEnc = await this.Crypto.encrypt(this.cryptoKey, item.title);
+      }
     }
     await setDoc(this._doc(stateKey, item.id), doc);
   },
@@ -381,6 +392,32 @@ window.AmandaFirebase = {
   async _sha256Short(s) {
     const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
     return Array.from(new Uint8Array(buf)).slice(0, 12).map(b => b.toString(16).padStart(2, '0')).join('');
+  },
+
+  /**
+   * 把加密钥(CryptoKey)+ userId 存到 IndexedDB
+   * 这样 Service Worker 收到 push 时也能读到密钥,本地解密推送内容
+   */
+  async _storeCryptoKeyInIDB(cryptoKey, userId) {
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open('amanda-tasks-crypto', 1);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains('crypto')) {
+          db.createObjectStore('crypto');
+        }
+      };
+      req.onsuccess = () => {
+        const db = req.result;
+        const tx = db.transaction('crypto', 'readwrite');
+        const store = tx.objectStore('crypto');
+        store.put(cryptoKey, 'currentKey');
+        store.put(userId, 'currentUserId');
+        tx.oncomplete = () => { db.close(); resolve(); };
+        tx.onerror = () => { db.close(); reject(tx.error); };
+      };
+      req.onerror = () => reject(req.error);
+    });
   },
 
   _showStatus(msg, isError) {

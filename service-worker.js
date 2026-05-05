@@ -2,7 +2,7 @@
  * Service Worker - 离线缓存 + Push 推送接收
  * ===================================================================== */
 
-const CACHE_VERSION = 'amanda-tasks-v3.1-push-ready';
+const CACHE_VERSION = 'amanda-tasks-v3.2-push-e2e';
 const CORE_FILES = [
   './',
   './index.html',
@@ -47,20 +47,77 @@ self.addEventListener('fetch', (event) => {
   );
 });
 
-/* ---- Push 推送接收(由后端发送)---- */
+/* ---- Push 推送接收(由 Cloud Function 发送)---- */
+
+/** 从 IndexedDB 读出加密钥(CryptoKey 对象,可直接用于 subtle.decrypt)*/
+function _swGetCryptoKey() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open('amanda-tasks-crypto', 1);
+    req.onsuccess = () => {
+      const db = req.result;
+      const tx = db.transaction('crypto', 'readonly');
+      const get = tx.objectStore('crypto').get('currentKey');
+      get.onsuccess = () => { db.close(); resolve(get.result || null); };
+      get.onerror = () => { db.close(); reject(get.error); };
+    };
+    req.onerror = () => reject(req.error);
+    req.onupgradeneeded = () => {
+      // 没建过库 → 没密钥
+      const db = req.result;
+      if (!db.objectStoreNames.contains('crypto')) db.createObjectStore('crypto');
+    };
+  });
+}
+
+function _swB64ToBytes(s) {
+  s = s.replace(/-/g, '+').replace(/_/g, '/');
+  while (s.length % 4) s += '=';
+  return Uint8Array.from(atob(s), c => c.charCodeAt(0));
+}
+
+async function _swDecrypt(cryptoKey, { iv, ct }) {
+  const ivBytes = _swB64ToBytes(iv);
+  const ctBytes = _swB64ToBytes(ct);
+  const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: ivBytes }, cryptoKey, ctBytes);
+  return new TextDecoder().decode(pt);
+}
+
 self.addEventListener('push', (event) => {
-  let data = {};
-  try { data = event.data ? event.data.json() : {}; } catch { data = { title: '任务提醒', body: event.data?.text() || '' }; }
-  const title = data.title || '任务指挥台';
-  const options = {
-    body: data.body || '',
-    icon: 'icons/icon-192.png',
-    badge: 'icons/icon-192.png',
-    tag: data.tag || 'amanda-tasks',
-    data: data.url || './index.html',
-    requireInteraction: data.urgent === true,
-  };
-  event.waitUntil(self.registration.showNotification(title, options));
+  event.waitUntil((async () => {
+    let data = {};
+    try { data = event.data ? event.data.json() : {}; }
+    catch { data = { title: '任务提醒', body: event.data?.text() || '' }; }
+
+    let title = data.title || '📋 任务即将到期';
+    let body  = data.body  || '打开 App 查看详情';
+
+    // 如果 payload 里有加密标题,本地解密后展示真实任务名
+    if (data.titleEnc && data.titleEnc.iv && data.titleEnc.ct) {
+      try {
+        const key = await _swGetCryptoKey();
+        if (key) {
+          const decrypted = await _swDecrypt(key, data.titleEnc);
+          // dueTime 是服务端附带的可读时间字符串,如 "15:00"
+          const tm = data.dueTime ? `${data.dueTime} · ` : '';
+          title = `📋 ${tm}${decrypted}`;
+          body  = '点击打开任务详情';
+        }
+      } catch (e) {
+        console.warn('[SW] 标题解密失败,降级用通用文案:', e);
+      }
+    }
+
+    const options = {
+      body,
+      icon: 'icons/icon-192.png',
+      badge: 'icons/icon-192.png',
+      tag: data.tag || 'amanda-task',
+      data: data.url || './index.html',
+      requireInteraction: data.urgent === true,
+      vibrate: [200, 100, 200],
+    };
+    await self.registration.showNotification(title, options);
+  })());
 });
 
 self.addEventListener('notificationclick', (event) => {
