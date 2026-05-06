@@ -65,10 +65,26 @@ const NOTE_CATEGORIES = {
   blue:   { name: '工作思路', bg: '#DBEAFE', accent: '#1E40AF', soft: '#EFF6FF' },
   green:  { name: '学习参考', bg: '#D1FAE5', accent: '#065F46', soft: '#ECFDF5' },
   pink:   { name: '灵感想法', bg: '#FCE7F3', accent: '#9D174D', soft: '#FDF2F8' },
-  purple: { name: '团队管理', bg: '#EDE9FE', accent: '#5B21B6', soft: '#F5F3FF' },
+  purple: { name: '日常生活', bg: '#EDE9FE', accent: '#5B21B6', soft: '#F5F3FF' },
   gray:   { name: '其他',     bg: '#E5E7EB', accent: '#374151', soft: '#F9FAFB' },
 };
 const NOTE_CAT_KEYS = Object.keys(NOTE_CATEGORIES);
+
+/** 提醒预设(按距任务到期时间的分钟数)*/
+const REMINDER_PRESETS = [
+  { minutes: 5,     label: '5 分钟前' },
+  { minutes: 15,    label: '15 分钟前' },
+  { minutes: 30,    label: '30 分钟前' },
+  { minutes: 60,    label: '1 小时前' },
+  { minutes: 120,   label: '2 小时前' },
+  { minutes: 1440,  label: '1 天前' },
+  { minutes: 2880,  label: '2 天前' },
+  { minutes: 4320,  label: '3 天前' },
+  { minutes: 10080, label: '1 周前' },
+];
+function reminderLabel(min) {
+  return REMINDER_PRESETS.find(p => p.minutes === min)?.label || `${min} 分钟前`;
+}
 
 const TRIP_TYPES = {
   paidExpo: { name: '付费展会', color: '#F59E0B', shades: ['#F59E0B', '#FBBF24', '#FCD34D', '#FDE68A'], soft: '#FEF3C7' },
@@ -269,7 +285,8 @@ const State = {
   ui: { tab: 'today', peopleFilter: 'all', rhythmTab: 'frequency',
         notesFilter: 'all', tripView: 'calendar',
         tripCalYear: null, tripCalMonth: null,   // 当前显示的月份
-        tripCardCollapsed: {} },                  // trip.id -> bool 折叠状态
+        tripCardCollapsed: {},                    // trip.id -> bool 折叠状态
+        todayFilter: 'default' },                 // default / overdue / today / tomorrow / done
 };
 
 function initData() {
@@ -527,75 +544,171 @@ function decorateForVideo(task) {
 function renderToday() {
   const stats = $('#stats-row');
   const root = $('#today-content');
+  const filter = State.ui.todayFilter || 'default';
+  const tomorrowDate = addDays(todayISO(), 1);
 
+  // 4 类计数
   const overdue = State.tasks.filter(isOverdue);
   const todayTasks = State.tasks.filter(t =>
     !isOverdue(t) && (isToday(t) || (t.type === '节奏-日期型' && t._instanceDueToday))
   );
-  const waiting = State.tasks.filter(t => t.status === '等他人');
+  const tomorrowTasks = State.tasks.filter(t =>
+    t.dueDate === tomorrowDate && t.status !== '已完成'
+  );
   const done = State.tasks.filter(t => t.status === '已完成' &&
     t.completedAt && t.completedAt.slice(0, 10) === todayISO());
 
-  // 顶部数字卡
+  // 顶部 4 个可点击数字卡
   stats.innerHTML = `
-    <div class="stat stat-overdue ${overdue.length ? 'on' : ''}">
+    <button class="stat stat-overdue ${overdue.length ? 'on' : ''} ${filter==='overdue'?'active':''}" data-stat-filter="overdue">
       <div class="stat-num">${overdue.length}</div><div class="stat-label">超期</div>
-    </div>
-    <div class="stat stat-today">
+    </button>
+    <button class="stat stat-today ${filter==='today'?'active':''}" data-stat-filter="today">
       <div class="stat-num">${todayTasks.length}</div><div class="stat-label">今日</div>
-    </div>
-    <div class="stat stat-waiting ${waiting.length ? 'on' : ''}">
-      <div class="stat-num">${waiting.length}</div><div class="stat-label">等他人</div>
-    </div>
-    <div class="stat stat-done">
+    </button>
+    <button class="stat stat-tomorrow ${tomorrowTasks.length ? 'on' : ''} ${filter==='tomorrow'?'active':''}" data-stat-filter="tomorrow">
+      <div class="stat-num">${tomorrowTasks.length}</div><div class="stat-label">明天</div>
+    </button>
+    <button class="stat stat-done ${filter==='done'?'active':''}" data-stat-filter="done">
       <div class="stat-num">${done.length}</div><div class="stat-label">已完成</div>
-    </div>`;
+    </button>`;
+
+  // 数字卡点击切换 filter(再次点同一张卡返回默认视图)
+  $$('.stat[data-stat-filter]', stats).forEach(el => {
+    el.onclick = () => {
+      const f = el.dataset.statFilter;
+      State.ui.todayFilter = State.ui.todayFilter === f ? 'default' : f;
+      renderToday();
+    };
+  });
 
   let html = '';
 
-  // 超期区(红色置顶,永不消失)
-  if (overdue.length) {
-    html += `<div class="section section-overdue">
-      <div class="section-bar bar-red"></div>
-      <div class="section-head">
-        <span class="section-title">超期 · 不会自动消失</span>
-        <span class="section-count">${overdue.length}</span>
-      </div>
-      <div class="section-body">
-        ${overdue.sort((a,b)=>new Date(a.dueDate)-new Date(b.dueDate))
-          .map(t => taskCard(t, { overdue: true })).join('')}
-      </div>
-    </div>`;
+  // === 渲染主体:根据 filter 切换 ===
+
+  // FILTER: overdue 单独显示
+  if (filter === 'overdue') {
+    if (!overdue.length) {
+      html = renderEmpty('☀', '今天没有超期任务', '继续保持节奏');
+    } else {
+      html = `<div class="section section-overdue">
+        <div class="section-bar bar-red"></div>
+        <div class="section-head">
+          <span class="section-title">超期 · 不会自动消失</span>
+          <span class="section-count">${overdue.length}</span>
+        </div>
+        <div class="section-body">
+          ${overdue.sort((a,b)=>new Date(a.dueDate)-new Date(b.dueDate))
+            .map(t => taskCard(t, { overdue: true })).join('')}
+        </div>
+      </div>`;
+    }
   }
 
-  // 三个领域分组(浅色背景"面板" + 深色分割线)
-  for (const d of DOMAINS) {
-    const items = sortByTime(todayTasks.filter(t => t.domain === d));
-    if (!items.length) continue;
-    html += `<div class="section section-domain" style="background:${DOMAIN_BG[d]}">
-      <div class="section-bar" style="background:${DOMAIN_COLOR[d]}"></div>
-      <div class="section-head">
-        <span class="section-title">${d}</span>
-        <span class="section-count">${items.length}</span>
-      </div>
-      <div class="section-body">
-        ${items.map(x => taskCard(decorateForVideo(x))).join('')}
-      </div>
-    </div>`;
+  // FILTER: today
+  else if (filter === 'today') {
+    if (!todayTasks.length) {
+      html = renderEmpty('☀', '今天没有任务', '点 + 新建一条');
+    } else {
+      for (const d of DOMAINS) {
+        const items = sortByTime(todayTasks.filter(t => t.domain === d));
+        if (!items.length) continue;
+        html += renderDomainSection(d, items);
+      }
+    }
   }
 
-  // 空状态
-  if (!overdue.length && !todayTasks.length) {
-    html = `<div class="empty">
-      <div class="empty-emoji">☀</div>
-      <div class="empty-title">今天没有待办</div>
-      <div class="empty-sub">点击右下角 + 新建任务</div>
-    </div>`;
+  // FILTER: tomorrow
+  else if (filter === 'tomorrow') {
+    if (!tomorrowTasks.length) {
+      html = renderEmpty('🌅', '明天暂无安排', '提前规划一下?');
+    } else {
+      for (const d of DOMAINS) {
+        const items = sortByTime(tomorrowTasks.filter(t => t.domain === d));
+        if (!items.length) continue;
+        html += renderDomainSection(d, items);
+      }
+      // 不属于已知领域的兜底(按理不会有)
+      const otherTomorrow = tomorrowTasks.filter(t => !DOMAINS.includes(t.domain));
+      if (otherTomorrow.length) {
+        html += `<div class="section"><div class="section-body">
+          ${otherTomorrow.map(t => taskCard(t)).join('')}
+        </div></div>`;
+      }
+    }
+  }
+
+  // FILTER: done(今日已完成,按完成时间倒序)
+  else if (filter === 'done') {
+    const sortedDone = [...done].sort((a, b) =>
+      (b.completedAt || '').localeCompare(a.completedAt || ''));
+    if (!sortedDone.length) {
+      html = renderEmpty('✓', '今天还没完成任务', '完成了点 ○ 标记打勾');
+    } else {
+      html = `<div class="section">
+        <div class="section-bar" style="background:var(--c-green)"></div>
+        <div class="section-head">
+          <span class="section-title">今日已完成</span>
+          <span class="section-count">${sortedDone.length}</span>
+        </div>
+        <div class="section-body">
+          ${sortedDone.map(t => taskCard(t)).join('')}
+        </div>
+      </div>`;
+    }
+  }
+
+  // FILTER: default(超期红色置顶 + 今日领域分组)
+  else {
+    // 超期区(红色置顶,永不消失)
+    if (overdue.length) {
+      html += `<div class="section section-overdue">
+        <div class="section-bar bar-red"></div>
+        <div class="section-head">
+          <span class="section-title">超期 · 不会自动消失</span>
+          <span class="section-count">${overdue.length}</span>
+        </div>
+        <div class="section-body">
+          ${overdue.sort((a,b)=>new Date(a.dueDate)-new Date(b.dueDate))
+            .map(t => taskCard(t, { overdue: true })).join('')}
+        </div>
+      </div>`;
+    }
+    // 三个领域分组(浅色背景"面板" + 深色分割线)
+    for (const d of DOMAINS) {
+      const items = sortByTime(todayTasks.filter(t => t.domain === d));
+      if (!items.length) continue;
+      html += renderDomainSection(d, items);
+    }
+    if (!overdue.length && !todayTasks.length) {
+      html = renderEmpty('☀', '今天没有待办', '点击右下角 + 新建任务');
+    }
   }
 
   root.innerHTML = html;
   bindTaskCardEvents(root);
   updateBadges();
+}
+
+function renderDomainSection(d, items) {
+  return `<div class="section section-domain" style="background:${DOMAIN_BG[d]}">
+    <div class="section-bar" style="background:${DOMAIN_COLOR[d]}"></div>
+    <div class="section-head">
+      <span class="section-title">${d}</span>
+      <span class="section-count">${items.length}</span>
+    </div>
+    <div class="section-body">
+      ${items.map(x => taskCard(decorateForVideo(x))).join('')}
+    </div>
+  </div>`;
+}
+
+function renderEmpty(emoji, title, sub) {
+  return `<div class="empty">
+    <div class="empty-emoji">${emoji}</div>
+    <div class="empty-title">${escapeHtml(title)}</div>
+    <div class="empty-sub">${escapeHtml(sub)}</div>
+  </div>`;
 }
 function decorateDomain(d) { return d; }
 
@@ -840,7 +953,7 @@ function renderNotes() {
   root.innerHTML = `<div class="notes-grid">${notes.map(noteCard).join('')}</div>`;
   bindNotesFilter();
   $$('.note-card', root).forEach(el => {
-    el.onclick = () => openNoteModal(el.dataset.nid);
+    el.onclick = () => openNoteReader(el.dataset.nid);
   });
 }
 
@@ -865,6 +978,42 @@ function noteCard(n) {
     <div class="note-title">${escapeHtml(n.title || '(无标题)')}</div>
     <div class="note-preview">${escapeHtml(preview) || '<span class="muted">空笔记</span>'}</div>
   </div>`;
+}
+
+/** 阅读模式:点笔记卡片默认进这里,只展示内容 */
+function openNoteReader(noteId) {
+  const n = State.notes.find(x => x.id === noteId);
+  if (!n) return;
+  const cat = NOTE_CATEGORIES[n.category] || NOTE_CATEGORIES.gray;
+
+  openModal({
+    title: n.title || '(无标题)',
+    body: `
+      <div class="note-read-meta">
+        <span class="note-cat-pill" style="background:${cat.bg};color:${cat.accent}">${escapeHtml(cat.name)}</span>
+        ${n.pinned ? '<span class="muted small">📌 已置顶</span>' : ''}
+      </div>
+      <div class="note-read-content">${escapeHtml(n.content || '') || '<span class="muted">(空内容)</span>'}</div>
+      <div class="muted small" style="margin-top:14px;padding-top:10px;border-top:0.5px dashed var(--c-border)">
+        创建于 ${(n.createdAt || '').slice(0,16).replace('T',' ')}
+        ${n.updatedAt && n.updatedAt !== n.createdAt
+          ? `<br>最后修改 ${n.updatedAt.slice(0,16).replace('T',' ')}` : ''}
+      </div>
+    `,
+    actions: [
+      { label: '关闭', onClick: closeModal },
+      { label: '删除', danger: true, onClick: () => {
+        if (!confirm('确定删除此笔记?')) return;
+        State.notes = State.notes.filter(x => x.id !== noteId);
+        persistNotes(); closeModal(); renderNotes(); toast('已删除');
+      }},
+      { label: '编辑', primary: true, onClick: () => {
+        closeModal();
+        // 等模态关闭动画完再打开编辑(closeModal cancel pending timer 防 flash)
+        setTimeout(() => openNoteModal(noteId), 50);
+      }},
+    ],
+  });
 }
 
 function openNoteModal(noteId) {
@@ -1420,6 +1569,7 @@ function taskCard(t, opt = {}) {
         ${t.dueDate ? `<span class="task-due">${fmtDate(t.dueDate)}</span>` : ''}
         ${overdue ? `<span class="task-overdue">逾期 ${overdueDays} 天</span>` : ''}
         ${t._videoBadge ? '<span class="badge-video">📹</span>' : ''}
+        ${(t.reminders && t.reminders.length) ? `<span class="task-reminder" title="提醒:${t.reminders.map(reminderLabel).join(' / ')}">⏰ ${t.reminders.length}</span>` : ''}
       </div>
     </div>
     ${overdue ? `<button class="btn-postpone" data-act="postpone">延期</button>` : ''}
@@ -1554,6 +1704,7 @@ function openTaskDetail(tid) {
           ${personNames ? `<div><b>关联人</b> · ${escapeHtml(personNames)}</div>` : ''}
           ${t.dueDate ? `<div><b>下次行动</b> · ${fmtDate(t.dueDate)}${overdue?` <span class="text-red">(已逾期 ${getOverdueDays(t)} 天)</span>`:''}</div>` : ''}
           ${(t.postponeCount||0) > 0 ? `<div class="text-amber"><b>已延期</b> ${t.postponeCount} 次${t.postponeCount>=3?' · 建议拆分或重新评估':''}</div>` : ''}
+          ${(t.reminders && t.reminders.length) ? `<div><b>⏰ 提醒</b> ${t.reminders.map(reminderLabel).join(' / ')}</div>` : ''}
           <div class="muted small">创建于 ${(t.createdAt||'').slice(0,10)}</div>
           ${t.note ? `<div class="task-note">${escapeHtml(t.note)}</div>` : ''}
         </div>
@@ -1632,6 +1783,16 @@ function openTaskModal(existing, defaults = {}) {
           <label class="flex1">日期 <input id="ti-due" type="date" value="${t.dueDate||''}"></label>
           <label class="flex1">时间(选填) <input id="ti-due-time" type="time" value="${t.dueTime||''}"></label>
         </div>
+        <div class="reminder-section">
+          <div class="reminder-label">⏰ 提醒(可多选,留空不提醒)</div>
+          <div class="reminder-chips">
+            ${REMINDER_PRESETS.map(p => {
+              const sel = (t.reminders || []).includes(p.minutes);
+              return `<button type="button" class="reminder-chip ${sel?'selected':''}" data-minutes="${p.minutes}">${p.label}</button>`;
+            }).join('')}
+          </div>
+          <div class="muted small reminder-hint">⚠️ 仅"日期+时间"都填了才会触发推送</div>
+        </div>
       </div>
 
       <div id="ti-freq-wrap" ${isFreq?'':'hidden'}>
@@ -1696,6 +1857,14 @@ function openTaskModal(existing, defaults = {}) {
     $('#ti-freq-wrap').hidden = v !== '节奏-频率型';
     $('#ti-date-wrap').hidden = v !== '节奏-日期型';
   });
+
+  // 提醒 chip 多选切换
+  $$('.reminder-chip', $('#modal-root')).forEach(chip => {
+    chip.onclick = (e) => {
+      e.preventDefault();
+      chip.classList.toggle('selected');
+    };
+  });
 }
 
 function saveTaskFromModal(orig, isEdit) {
@@ -1729,11 +1898,30 @@ function saveTaskFromModal(orig, isEdit) {
   }
 
   // 计算未加密的 dueAt 时间戳(供 Cloud Function 服务端定时扫描)
-  // dueAt 是任务到期那一刻的 ISO,提前 5 分钟推送
   if (t.dueDate && t.dueTime) {
     t.dueAt = new Date(`${t.dueDate}T${t.dueTime}:00`).toISOString();
   } else {
     delete t.dueAt;
+  }
+
+  // 收集提醒选择(只对单点任务且有时间的才有意义)
+  const selectedChips = $$('.reminder-chip.selected', $('#modal-root'));
+  if (selectedChips.length && t.dueAt) {
+    t.reminders = selectedChips.map(c => +c.dataset.minutes).sort((a, b) => a - b);
+    const dueMs = new Date(t.dueAt).getTime();
+    t.reminderTimes = t.reminders.map(min => new Date(dueMs - min * 60000).toISOString());
+    // nextReminderAt = 最近的尚未发生的提醒
+    const now = Date.now();
+    const futureMs = t.reminderTimes
+      .map(s => new Date(s).getTime())
+      .filter(ts => ts > now);
+    t.nextReminderAt = futureMs.length
+      ? new Date(Math.min(...futureMs)).toISOString()
+      : null;
+  } else {
+    delete t.reminders;
+    delete t.reminderTimes;
+    delete t.nextReminderAt;
   }
 
   if (!t.title) { toast('请填写任务名'); return; }

@@ -2,7 +2,7 @@
  * Service Worker - 离线缓存 + Push 推送接收
  * ===================================================================== */
 
-const CACHE_VERSION = 'amanda-tasks-v3.5-cal-bars-fix';
+const CACHE_VERSION = 'amanda-tasks-v3.8-task-reminders';
 const CORE_FILES = [
   './',
   './index.html',

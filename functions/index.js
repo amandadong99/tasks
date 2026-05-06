@@ -128,7 +128,93 @@ exports.sendTaskReminders = onSchedule(
       }
     }
 
-    logger.info(`完成 — 推送任务数:${sent}, 跳过:${skipped}, 失败:${failed}`);
+    logger.info(`到期推送完成 — 推送任务数:${sent}, 跳过:${skipped}, 失败:${failed}`);
+
+    // === 第二轮:扫描自定义提醒(reminderTimes / nextReminderAt)===
+    const reminderSnap = await db.collectionGroup('tasks')
+      .where('nextReminderAtTs', '>=', lowerBound)
+      .where('nextReminderAtTs', '<=', upperBound)
+      .get();
+
+    if (reminderSnap.empty) {
+      logger.info('无即将触发的自定义提醒');
+      return;
+    }
+    logger.info(`发现 ${reminderSnap.size} 条即将触发的自定义提醒`);
+
+    let rSent = 0, rFailed = 0;
+    for (const taskDoc of reminderSnap.docs) {
+      const segments = taskDoc.ref.path.split('/');
+      const userId = segments[1];
+      const taskId = segments[3];
+      const data = taskDoc.data();
+
+      // 找出本次触发的提醒(reminderTime 落在当前窗口)
+      const triggered = (data.reminderTimes || []).find(s => {
+        const ts = new Date(s).getTime();
+        return ts >= lowerBound && ts <= upperBound;
+      });
+      if (!triggered) { rSent--; continue; }
+
+      // 计算"提前多久"文案
+      const dueAtTs = data.dueAtTs || (data.dueAt ? new Date(data.dueAt).getTime() : 0);
+      const offsetMin = Math.round((dueAtTs - new Date(triggered).getTime()) / 60000);
+      let offsetText = `${offsetMin} 分钟前`;
+      if (offsetMin >= 10080 && offsetMin % 10080 === 0) offsetText = `${offsetMin/10080} 周前`;
+      else if (offsetMin >= 1440 && offsetMin % 1440 === 0) offsetText = `${offsetMin/1440} 天前`;
+      else if (offsetMin >= 60 && offsetMin % 60 === 0) offsetText = `${offsetMin/60} 小时前`;
+
+      const dueDate = new Date(data.dueAt);
+      const localTime = dueDate.toLocaleTimeString('zh-CN', {
+        hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Shanghai',
+      });
+      const payloadObj = {
+        title: `⏰ ${offsetText}提醒`,
+        body: `任务将于 ${localTime} 到期 — 打开 App 查看`,
+        tag: 'reminder-' + taskId + '-' + offsetMin,
+        url: './index.html#today',
+        urgent: true,
+        dueTime: localTime,
+      };
+      if (data.titleEnc && data.titleEnc.iv && data.titleEnc.ct) {
+        payloadObj.titleEnc = data.titleEnc;
+      }
+      const payload = JSON.stringify(payloadObj);
+
+      // 找该用户订阅
+      const subsSnap = await db.collection('users').doc(userId).collection('pushSubs').get();
+      let userSent = 0;
+      for (const subDoc of subsSnap.docs) {
+        const sub = subDoc.data();
+        try {
+          await webpush.sendNotification(
+            { endpoint: sub.endpoint, keys: sub.keys },
+            payload
+          );
+          userSent++;
+        } catch (err) {
+          if (err.statusCode === 410 || err.statusCode === 404) {
+            await subDoc.ref.delete().catch(() => {});
+          }
+          rFailed++;
+        }
+      }
+
+      // 更新 nextReminderAt → 下一个未触发的提醒(在 upperBound 之后)
+      const futureReminders = (data.reminderTimes || [])
+        .filter(s => new Date(s).getTime() > upperBound);
+      const next = futureReminders.length
+        ? futureReminders.reduce((a, b) =>
+            new Date(a).getTime() < new Date(b).getTime() ? a : b)
+        : null;
+      await taskDoc.ref.update({
+        nextReminderAt: next,
+        nextReminderAtTs: next ? new Date(next).getTime() : null,
+      }).catch(e => logger.warn('更新 nextReminderAt 失败:', e.message));
+
+      if (userSent > 0) rSent++;
+    }
+    logger.info(`提醒推送完成 — 触发:${rSent}, 失败:${rFailed}`);
   }
 );
 

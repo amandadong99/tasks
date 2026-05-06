@@ -82,7 +82,7 @@ button { font-family: inherit; }
 .view { display: block; }
 .view[hidden] { display: none !important; }
 
-/* ---- 顶部 4 数字卡 ---- */
+/* ---- 顶部 4 数字卡(可点击切换过滤)---- */
 .stats-row {
   display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;
   margin-bottom: 14px;
@@ -90,14 +90,23 @@ button { font-family: inherit; }
 .stat {
   background: var(--c-card); border: 0.5px solid var(--c-border);
   border-radius: 12px; padding: 10px 8px; text-align: center;
+  cursor: pointer; font-family: inherit;
+  transition: transform .12s, border-color .15s;
 }
-.stat-num { font-size: 20px; font-weight: 600; }
+.stat:active { transform: scale(0.96); }
+.stat-num { font-size: 20px; font-weight: 600; line-height: 1.15; }
 .stat-label { font-size: 11px; color: var(--c-text-muted); margin-top: 2px; }
 .stat.on.stat-overdue { background: var(--c-red-soft); border-color: var(--c-red); }
 .stat.on.stat-overdue .stat-num { color: var(--c-red); }
-.stat.on.stat-waiting { background: var(--c-amber-soft); border-color: var(--c-amber); }
-.stat.on.stat-waiting .stat-num { color: var(--c-amber-deep); }
+.stat.on.stat-tomorrow { background: var(--c-amber-soft); border-color: var(--c-amber); }
+.stat.on.stat-tomorrow .stat-num { color: var(--c-amber-deep); }
 .stat-done { color: var(--c-green-deep); }
+/* 当前激活的卡片(被点中,正在过滤)用主黄色加粗描边 */
+.stat.active {
+  border: 2px solid var(--c-primary);
+  box-shadow: 0 0 0 2px var(--c-primary-soft);
+}
+.stat.active .stat-label { color: var(--c-primary-deep); font-weight: 600; }
 
 /* ---- 区块(领域分组、超期区) ---- */
 .section { margin-bottom: 14px; }
@@ -185,6 +194,41 @@ button { font-family: inherit; }
 .task-time {
   background: var(--c-primary-soft); color: var(--c-primary-deep);
   padding: 1px 6px; border-radius: 8px; font-weight: 600;
+}
+.task-reminder {
+  background: #FEF3C7; color: #B45309;
+  padding: 1px 6px; border-radius: 8px; font-weight: 500;
+}
+
+/* 任务弹窗里的提醒区块 */
+.reminder-section {
+  margin-bottom: 10px; padding: 10px 12px;
+  background: var(--c-primary-soft);
+  border-radius: 8px;
+  border: 0.5px solid #FCD34D;
+}
+.reminder-label {
+  font-size: 12px; font-weight: 600; color: var(--c-primary-deep);
+  margin-bottom: 8px;
+}
+.reminder-chips {
+  display: flex; flex-wrap: wrap; gap: 6px;
+}
+.reminder-chip {
+  border: 1px solid var(--c-border);
+  background: #fff; color: var(--c-text);
+  padding: 5px 10px; border-radius: 14px;
+  font-size: 12px; cursor: pointer;
+  font-family: inherit;
+  transition: all .15s;
+}
+.reminder-chip:active { transform: scale(0.96); }
+.reminder-chip.selected {
+  background: var(--c-primary); color: var(--c-primary-on);
+  border-color: var(--c-primary); font-weight: 600;
+}
+.reminder-hint {
+  margin-top: 8px;
 }
 .task-overdue {
   background: var(--c-red); color: #fff;
@@ -614,6 +658,22 @@ button { font-family: inherit; }
 }
 .note-colors {
   display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px;
+}
+/* 阅读模式 */
+.note-read-meta {
+  display: flex; gap: 8px; align-items: center;
+  margin-bottom: 14px;
+}
+.note-cat-pill {
+  font-size: 12px; padding: 4px 12px; border-radius: 12px;
+  font-weight: 500;
+}
+.note-read-content {
+  font-size: 15px; line-height: 1.7;
+  white-space: pre-wrap; word-break: break-word;
+  padding: 4px 0;
+  min-height: 80px;
+  color: var(--c-text);
 }
 .note-color-chip {
   border: 1.5px solid transparent; border-radius: 14px;

@@ -315,9 +315,16 @@ window.AmandaFirebase = {
       }
       // 单独再加密标题(小 payload),Cloud Function 推送时把这个 ct 直接塞进通知
       // SW 收到推送后,用 IndexedDB 里的密钥本地解密 → iPhone 锁屏看到真实标题
-      // Apple/Google 推送服务器始终只看到密文
       if (item.title) {
         doc.titleEnc = await this.Crypto.encrypt(this.cryptoKey, item.title);
+      }
+      // 提醒时间(明文,用于服务端扫描)
+      if (item.reminderTimes && item.reminderTimes.length) {
+        doc.reminderTimes = item.reminderTimes;
+      }
+      if (item.nextReminderAt) {
+        doc.nextReminderAt = item.nextReminderAt;
+        doc.nextReminderAtTs = new Date(item.nextReminderAt).getTime();
       }
     }
     await setDoc(this._doc(stateKey, item.id), doc);
