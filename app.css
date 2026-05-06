@@ -253,6 +253,22 @@ button { font-family: inherit; }
 
 /* ---- 节奏卡片 ---- */
 .rhythm-toolbar { margin-bottom: 10px; }
+.long-term-divider {
+  height: 1px;
+  background: var(--c-border);
+  margin: 18px 0 14px;
+  position: relative;
+}
+.long-term-divider::after {
+  content: '本周之外的长期任务';
+  position: absolute;
+  top: -10px; left: 50%; transform: translateX(-50%);
+  background: var(--c-bg);
+  padding: 0 12px;
+  font-size: 11px;
+  color: var(--c-text-muted);
+  white-space: nowrap;
+}
 .rhythm-card { display: block; }
 .rhythm-card.rhythm-red {
   background: var(--c-red-soft); border-color: var(--c-red);

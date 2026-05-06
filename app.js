@@ -451,6 +451,17 @@ function getOverdueDays(task) {
 function getPersonById(id) { return State.persons.find(p => p.id === id); }
 function getPersonName(id) { const p = getPersonById(id); return p ? p.name : '?'; }
 
+/** 本周(周一-周日)结束日期的 ISO 字符串 */
+function endOfThisWeekISO() {
+  const today = new Date(todayISO());
+  const dow = today.getDay(); // 0=周日, 1=周一, ...
+  const sunday = new Date(today);
+  // 距离本周日还有几天:周日 dow=0 → 0 天;周一 → 6 天;周六 → 1 天
+  const daysToSunday = (7 - dow) % 7;
+  sunday.setDate(today.getDate() + daysToSunday);
+  return sunday.toISOString().slice(0, 10);
+}
+
 /** 按时间排序:有时间的在前(按 HH:MM 升序),无时间的在后保持原顺序 */
 function sortByTime(tasks) {
   return [...tasks].sort((a, b) => {
@@ -857,6 +868,43 @@ function renderRhythm() {
     </div>`;
     if (!items.length) html += `<div class="empty">暂无频率型节奏任务</div>`;
     else html += items.map(rhythmFreqCard).join('');
+
+    // === 本周之外的长期任务 ===
+    const endOfWeek = endOfThisWeekISO();
+    const longTermTasks = State.tasks.filter(t =>
+      t.status !== '已完成' &&
+      t.type !== '节奏-频率型' &&
+      t.type !== '节奏-日期型' &&
+      // 没有日期的长期跟进 OR 日期在本周日之后
+      (!t.dueDate || t.dueDate > endOfWeek)
+    );
+
+    if (longTermTasks.length) {
+      html += `<div class="long-term-divider"></div>`;
+      // 按领域分组 + 每组内按日期排序(无日期的最后)
+      for (const d of DOMAINS) {
+        const items = longTermTasks
+          .filter(t => t.domain === d)
+          .sort((a, b) => {
+            if (!a.dueDate && !b.dueDate) return 0;
+            if (!a.dueDate) return 1;
+            if (!b.dueDate) return -1;
+            return new Date(a.dueDate) - new Date(b.dueDate);
+          });
+        if (!items.length) continue;
+        html += `<div class="section section-domain" style="background:${DOMAIN_BG[d]}">
+          <div class="section-bar" style="background:${DOMAIN_COLOR[d]}"></div>
+          <div class="section-head">
+            <span class="section-title">${d} · 本周之外</span>
+            <span class="section-count">${items.length}</span>
+          </div>
+          <div class="section-body">
+            ${items.map(t => taskCard(t)).join('')}
+          </div>
+        </div>`;
+      }
+    }
+
     root.innerHTML = html;
   } else {
     const items = State.tasks
