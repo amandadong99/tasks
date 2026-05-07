@@ -2258,6 +2258,8 @@ function openSettings() {
         <button class="btn flex1" id="set-export">导出 JSON</button>
         <button class="btn flex1" id="set-import">导入 JSON</button>
       </div>
+      <button class="btn btn-block" id="set-dedupe-tasks" style="margin-top:8px">🧹 清理重复任务</button>
+      <button class="btn btn-block" id="set-dedupe-notes" style="margin-top:6px">🧹 清理重复笔记</button>
       <button class="btn btn-block btn-danger" id="set-reset" style="margin-top:8px">重置本地数据(重新预填种子)</button>
 
       <h3 style="margin-top:18px">关于</h3>
@@ -2298,6 +2300,8 @@ function openSettings() {
   $('#set-export').onclick = exportData;
   $('#set-import').onclick = importData;
   $('#set-reset').onclick = resetData;
+  $('#set-dedupe-tasks').onclick = dedupeTasks;
+  $('#set-dedupe-notes').onclick = dedupeNotes;
 }
 
 async function requestNotificationPermission() {
@@ -2418,6 +2422,88 @@ function resetData() {
   Object.values(KEY).forEach(k => k !== KEY.docKey && Store.remove(k));
   initData();
   closeModal(); renderAll(); toast('已重置');
+}
+
+/** 查找重复:把 title+dueDate+domain 完全相同的任务视为重复 */
+function findTaskDuplicates() {
+  const seen = new Map();
+  for (const t of State.tasks) {
+    const key = (t.title || '') + '|' + (t.dueDate || '') + '|' + (t.domain || '') + '|' + (t.type || '');
+    if (!seen.has(key)) seen.set(key, []);
+    seen.get(key).push(t);
+  }
+  const groups = [];
+  for (const [, group] of seen) {
+    if (group.length > 1) groups.push(group);
+  }
+  return groups;
+}
+
+/** 清理重复:每组保留一条(优先保留有最多推进历史的),其余删除 */
+function dedupeTasks() {
+  const groups = findTaskDuplicates();
+  if (!groups.length) {
+    toast('没有发现重复任务');
+    return;
+  }
+  const totalExtras = groups.reduce((sum, g) => sum + g.length - 1, 0);
+  if (!confirm(`发现 ${groups.length} 组重复(共 ${totalExtras} 条多余)。\n每组保留一条(优先保留有推进历史的),其余删除。\n继续?`)) return;
+
+  const toDelete = [];
+  for (const group of groups) {
+    // 按"已完成的优先 → 推进历史多的优先 → createdAt 早的优先"排序;保留第1条
+    const sorted = [...group].sort((a, b) => {
+      const aDone = a.status === '已完成' ? 1 : 0;
+      const bDone = b.status === '已完成' ? 1 : 0;
+      if (aDone !== bDone) return bDone - aDone;
+      const ah = a.progressHistory?.length || 0;
+      const bh = b.progressHistory?.length || 0;
+      if (ah !== bh) return bh - ah;
+      return (a.createdAt || '').localeCompare(b.createdAt || '');
+    });
+    for (let i = 1; i < sorted.length; i++) {
+      toDelete.push(sorted[i].id);
+    }
+  }
+
+  State.tasks = State.tasks.filter(t => !toDelete.includes(t.id));
+
+  // 把删除推到云端(同步到其他设备)
+  if (window.AmandaFirebase?.ready) {
+    for (const id of toDelete) {
+      window.AmandaFirebase.deleteItem('tasks', id);
+    }
+  }
+
+  persistTasks();
+  renderAll();
+  toast(`✓ 已清理 ${toDelete.length} 条重复`);
+}
+
+/** 同样的清理,针对笔记 */
+function dedupeNotes() {
+  const seen = new Map();
+  for (const n of State.notes) {
+    const key = (n.title || '') + '|' + (n.content || '');
+    if (!seen.has(key)) seen.set(key, []);
+    seen.get(key).push(n);
+  }
+  const dupes = [];
+  for (const [, group] of seen) {
+    if (group.length > 1) {
+      const sorted = [...group].sort((a, b) =>
+        (b.updatedAt || b.createdAt || '').localeCompare(a.updatedAt || a.createdAt || ''));
+      for (let i = 1; i < sorted.length; i++) dupes.push(sorted[i].id);
+    }
+  }
+  if (!dupes.length) { toast('没有重复笔记'); return; }
+  if (!confirm(`发现 ${dupes.length} 条重复笔记。删除?`)) return;
+  State.notes = State.notes.filter(n => !dupes.includes(n.id));
+  if (window.AmandaFirebase?.ready) {
+    for (const id of dupes) window.AmandaFirebase.deleteItem('notes', id);
+  }
+  persistNotes(); renderAll();
+  toast(`✓ 已清理 ${dupes.length} 条重复笔记`);
 }
 
 /* ---------------------------------------------------------------------

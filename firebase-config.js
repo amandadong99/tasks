@@ -215,20 +215,37 @@ window.AmandaFirebase = {
         }
       }
 
-      // ❗ 关键改动:不再粗暴 A.State[stateKey] = remoteItems
-      // 而是按 ID 合并 — 远端有的用远端版本(可能是其他设备的更新),
-      // 本地独有的 ID 保留下来并推到服务器(防止离线编辑丢失)
+      // 按 ID 合并 — 远端有的用远端版本,本地独有的(真正的离线编辑)保留并推送
       const remoteIds = new Set(remoteItems.map(i => i.id));
       const localItems = A.State[stateKey] || [];
-      const localOnly = localItems.filter(i => i.id && !remoteIds.has(i.id));
+      let localOnly = localItems.filter(i => i.id && !remoteIds.has(i.id));
+
+      // ❗ 防重复:如果云端已有数据,过滤掉"看起来像种子"的本地独有项
+      // (避免重置后的新种子 + 老云端数据导致重复)
+      // 种子的特征:progressHistory 只有 1 条且内容是"系统预填"/"从滴答清单导入"
+      if (remoteItems.length > 0 && stateKey === 'tasks') {
+        const beforeFilter = localOnly.length;
+        localOnly = localOnly.filter(item => {
+          const hist = item.progressHistory || [];
+          if (hist.length === 0) return true; // 完全没历史:无法判断,保留
+          if (hist.length > 1) return true;   // 有多条历史 = 用户用过,保留
+          const onlyEntry = hist[0];
+          if (onlyEntry.type === '创建' &&
+              (onlyEntry.content === '系统预填' || onlyEntry.content === '从滴答清单导入')) {
+            return false; // 看起来是种子,过滤掉
+          }
+          return true;
+        });
+        if (beforeFilter !== localOnly.length) {
+          console.info(`[Sync] 过滤掉 ${beforeFilter - localOnly.length} 条疑似种子任务,防止重复`);
+        }
+      }
 
       if (remoteItems.length > 0 || localOnly.length > 0) {
-        // 合并:远端 + 本地独有
         A.State[stateKey] = [...remoteItems, ...localOnly];
         A.Store.save(A.KEY[stateKey], A.State[stateKey]);
         console.info(`[Sync] 合并 ${stateKey}: 远端 ${remoteItems.length} + 本地独有 ${localOnly.length}`);
 
-        // 把本地独有的项推到服务器(确保它们真的同步到云端)
         for (const item of localOnly) {
           try { await this._setEncrypted(stateKey, item); }
           catch (e) { console.warn(`[Sync] 推 ${stateKey}/${item.id} 失败:`, e.message); }

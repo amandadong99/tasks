@@ -2,7 +2,7 @@
  * Service Worker - 离线缓存 + Push 推送接收
  * ===================================================================== */
 
-const CACHE_VERSION = 'amanda-tasks-v4.1-fix-sync-loss';
+const CACHE_VERSION = 'amanda-tasks-v4.2-dedupe';
 const CORE_FILES = [
   './',
   './index.html',
