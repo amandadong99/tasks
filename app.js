@@ -465,8 +465,8 @@ function endOfThisWeekISO() {
 /** 按时间排序:有时间的在前(按 HH:MM 升序),无时间的在后保持原顺序 */
 function sortByTime(tasks) {
   return [...tasks].sort((a, b) => {
-    const ta = a.dueTime || '';
-    const tb = b.dueTime || '';
+    const ta = a.dueTime || a.timeOfDay || '';
+    const tb = b.dueTime || b.timeOfDay || '';
     if (ta && !tb) return -1;
     if (!ta && tb) return 1;
     if (ta && tb) return ta.localeCompare(tb);
@@ -487,7 +487,7 @@ const DOMAIN_BG = {
 const DOMAINS = ['客户与销售', '内部与系统', '家庭与个人'];
 
 function periodToDays(period, custom) {
-  return ({ '每周': 7, '每月': 30, '每季': 90 })[period] || custom || 7;
+  return ({ '每天': 1, '每周': 7, '每月': 30, '每季': 90 })[period] || custom || 7;
 }
 function rhythmDaysSinceLast(task) {
   if (!task.lastDoneAt) return periodToDays(task.frequencyPeriod, task.frequencyCustomDays) * 2;
@@ -505,6 +505,7 @@ function rhythmStatus(task) {
 /* 判断节奏-日期型任务今天是否应触发 */
 function dateBasedTriggersToday(task) {
   const today = new Date(todayISO());
+  if (task.datePattern === '每天') return true;
   if (task.datePattern === '每周某日') return today.getDay() === task.weekday;
   if (task.datePattern === '每月某日') return today.getDate() === task.monthDay;
   if (task.datePattern === '每季末') {
@@ -1613,7 +1614,7 @@ function taskCard(t, opt = {}) {
       <div class="task-meta">
         ${typeBadge}
         ${personLabels ? `<span class="task-person">${escapeHtml(personLabels)}</span>` : ''}
-        ${t.dueTime ? `<span class="task-time">${escapeHtml(t.dueTime)}</span>` : ''}
+        ${(t.dueTime || t.timeOfDay) ? `<span class="task-time">${escapeHtml(t.dueTime || t.timeOfDay)}</span>` : ''}
         ${t.dueDate ? `<span class="task-due">${fmtDate(t.dueDate)}</span>` : ''}
         ${overdue ? `<span class="task-overdue">逾期 ${overdueDays} 天</span>` : ''}
         ${t._videoBadge ? '<span class="badge-video">📹</span>' : ''}
@@ -1651,12 +1652,25 @@ function completeTask(tid) {
   const t = State.tasks.find(x => x.id === tid);
   if (!t) return;
   if (t.type === '节奏-频率型') return markRhythmDone(tid);
+  if (t.type === '节奏-日期型') return markDateInstanceDone(tid);
   t.status = '已完成';
   t.completedAt = new Date().toISOString();
   (t.progressHistory ||= []).push({ date: todayISO(), type: '推进', content: '标记完成' });
   persistTasks();
   renderAll();
   toast('已完成 ✓');
+}
+
+/** 节奏-日期型 任务"今日完成":只关闭今天的实例,下次按计划再出现 */
+function markDateInstanceDone(tid) {
+  const t = State.tasks.find(x => x.id === tid);
+  if (!t) return;
+  t.lastDoneAt = todayISO();
+  t._instanceDueToday = false;
+  (t.progressHistory ||= []).push({ date: todayISO(), type: '推进', content: '本次完成' });
+  persistTasks();
+  renderAll();
+  toast('已完成 ✓ — 下次按计划再出现');
 }
 
 function markRhythmDone(tid) {
@@ -1806,7 +1820,13 @@ function openTaskModal(existing, defaults = {}) {
   const isFreq = t.type === '节奏-频率型';
   const isDate = t.type === '节奏-日期型';
   const personOpts = State.persons.map(p =>
-    `<label class="person-opt"><input type="checkbox" value="${p.id}" ${t.relatedPerson?.includes(p.id)?'checked':''}> ${escapeHtml(p.name)}<span class="muted small"> ${p.type}</span></label>`).join('');
+    `<label class="person-opt">
+      <input type="checkbox" value="${p.id}" ${t.relatedPerson?.includes(p.id)?'checked':''}>
+      <span class="person-opt-name">${escapeHtml(p.name)}</span>
+      <span class="muted small"> ${p.type}</span>
+      <button type="button" class="person-del" data-pid="${p.id}" aria-label="删除">×</button>
+    </label>`
+  ).join('');
 
   openModal({
     title: existing ? '编辑任务' : '新建任务',
@@ -1846,30 +1866,38 @@ function openTaskModal(existing, defaults = {}) {
       <div id="ti-freq-wrap" ${isFreq?'':'hidden'}>
         <label>周期
           <select id="ti-period">
-            ${['每周','每月','每季','自定义天数'].map(x =>
+            ${['每天','每周','每月','每季','自定义天数'].map(x =>
               `<option ${t.frequencyPeriod===x?'selected':''}>${x}</option>`).join('')}
           </select>
         </label>
-        <label>超期倍数 <input id="ti-mult" type="number" step="0.1" value="${t.overdueMultiplier||1.5}"></label>
+        <div id="ti-custom-days-wrap" ${t.frequencyPeriod==='自定义天数'?'':'hidden'}>
+          <label>每隔多少天 <input id="ti-custom-days" type="number" min="1" value="${t.frequencyCustomDays||7}"></label>
+        </div>
+        <div class="muted small">"频率型"按"距上次完成的天数"提醒,在节奏 Tab 里显示。需要每天固定时间触发请用"节奏-日期型"。</div>
       </div>
 
       <div id="ti-date-wrap" ${isDate?'':'hidden'}>
         <label>日期模式
           <select id="ti-pattern">
-            ${['每周某日','每月某日','每季末'].map(x =>
+            ${['每天','每周某日','每月某日','每季末'].map(x =>
               `<option ${t.datePattern===x?'selected':''}>${x}</option>`).join('')}
           </select>
         </label>
-        <label>每周某日 <select id="ti-weekday">
-          ${['周日','周一','周二','周三','周四','周五','周六'].map((w,i)=>
-            `<option value="${i}" ${t.weekday===i?'selected':''}>${w}</option>`).join('')}
-        </select></label>
-        <label>每月某日 <input id="ti-monthday" type="number" min="1" max="31" value="${t.monthDay||1}"></label>
-        <label>时间 <input id="ti-time" type="time" value="${t.timeOfDay||'10:00'}"></label>
+        <div id="ti-pattern-weekday-wrap" ${t.datePattern==='每周某日'?'':'hidden'}>
+          <label>每周几 <select id="ti-weekday">
+            ${['周日','周一','周二','周三','周四','周五','周六'].map((w,i)=>
+              `<option value="${i}" ${t.weekday===i?'selected':''}>${w}</option>`).join('')}
+          </select></label>
+        </div>
+        <div id="ti-pattern-monthday-wrap" ${t.datePattern==='每月某日'?'':'hidden'}>
+          <label>每月几号 <input id="ti-monthday" type="number" min="1" max="31" value="${t.monthDay||1}"></label>
+        </div>
+        <label>时间 <input id="ti-time" type="time" value="${t.timeOfDay||'09:00'}"></label>
         <label class="check-row">
           <input type="checkbox" id="ti-video" ${t.autoVideoOnTrip?'checked':''}>
           出差期间自动改视频
         </label>
+        <div class="muted small">"节奏-日期型"会按规则自动出现在"今日"列表。完成后下次按计划再出现。</div>
       </div>
 
       <div class="row">
@@ -1885,8 +1913,16 @@ function openTaskModal(existing, defaults = {}) {
         </label>
       </div>
 
-      <details><summary>关联人(可多选)</summary>
-        <div class="person-grid">${personOpts}</div>
+      <details><summary>关联人(可多选,可新增/删除)</summary>
+        <div class="person-add-row">
+          <input id="ti-new-person-name" placeholder="新人物名字..." />
+          <select id="ti-new-person-type">
+            <option value="客户">客户</option>
+            <option value="团队">团队</option>
+          </select>
+          <button type="button" id="ti-new-person-add" class="btn btn-mini">+ 添加</button>
+        </div>
+        <div class="person-grid" id="ti-person-grid">${personOpts}</div>
       </details>
 
       <label>备注 <textarea id="ti-note" rows="2">${escapeHtml(t.note||'')}</textarea></label>
@@ -1906,6 +1942,18 @@ function openTaskModal(existing, defaults = {}) {
     $('#ti-date-wrap').hidden = v !== '节奏-日期型';
   });
 
+  // 频率型周期切换 → 显示/隐藏 自定义天数 输入框
+  $('#ti-period')?.addEventListener('change', e => {
+    $('#ti-custom-days-wrap').hidden = e.target.value !== '自定义天数';
+  });
+
+  // 日期型 模式切换 → 显示对应的"周几"或"几号"输入
+  $('#ti-pattern')?.addEventListener('change', e => {
+    const v = e.target.value;
+    $('#ti-pattern-weekday-wrap').hidden = v !== '每周某日';
+    $('#ti-pattern-monthday-wrap').hidden = v !== '每月某日';
+  });
+
   // 提醒 chip 多选切换
   $$('.reminder-chip', $('#modal-root')).forEach(chip => {
     chip.onclick = (e) => {
@@ -1913,6 +1961,79 @@ function openTaskModal(existing, defaults = {}) {
       chip.classList.toggle('selected');
     };
   });
+
+  // 关联人:新增人物 + 删除人物
+  bindPersonManagement();
+}
+
+function bindPersonManagement() {
+  $('#ti-new-person-add')?.addEventListener('click', () => {
+    const name = $('#ti-new-person-name').value.trim();
+    const type = $('#ti-new-person-type').value;
+    if (!name) { toast('请输入名字'); return; }
+    if (State.persons.some(p => p.name === name)) {
+      toast('已存在同名人物');
+      return;
+    }
+    const p = {
+      id: 'p-' + Date.now() + Math.random().toString(36).slice(2, 6),
+      name, type,
+    };
+    State.persons.push(p);
+    persistPersons();
+    $('#ti-new-person-name').value = '';
+    refreshPersonGrid();
+    toast(`已添加 ${name}`);
+  });
+  // 回车也能添加
+  $('#ti-new-person-name')?.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); $('#ti-new-person-add').click(); }
+  });
+
+  // 每个人物旁的 × 删除按钮
+  bindPersonDeleteButtons();
+}
+
+function bindPersonDeleteButtons() {
+  $$('.person-del', $('#modal-root')).forEach(b => {
+    b.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const pid = b.dataset.pid;
+      const p = State.persons.find(x => x.id === pid);
+      if (!p) return;
+      const usedBy = State.tasks.filter(t => t.relatedPerson?.includes(pid));
+      if (usedBy.length > 0) {
+        if (!confirm(`${p.name} 还在 ${usedBy.length} 个任务里使用,确定删除?\n这些任务里的关联会被自动清除。`)) return;
+        usedBy.forEach(t => { t.relatedPerson = t.relatedPerson.filter(id => id !== pid); });
+        persistTasks();
+      } else {
+        if (!confirm(`确定删除 "${p.name}"?`)) return;
+      }
+      State.persons = State.persons.filter(x => x.id !== pid);
+      persistPersons();
+      refreshPersonGrid();
+      toast('已删除');
+    };
+  });
+}
+
+function refreshPersonGrid() {
+  const grid = $('#ti-person-grid');
+  if (!grid) return;
+  // 保留之前已勾选的状态
+  const checkedIds = new Set(
+    $$('input[type="checkbox"]', grid).filter(i => i.checked).map(i => i.value)
+  );
+  grid.innerHTML = State.persons.map(p =>
+    `<label class="person-opt">
+      <input type="checkbox" value="${p.id}" ${checkedIds.has(p.id) ? 'checked' : ''}>
+      <span class="person-opt-name">${escapeHtml(p.name)}</span>
+      <span class="muted small"> ${p.type}</span>
+      <button type="button" class="person-del" data-pid="${p.id}" aria-label="删除">×</button>
+    </label>`
+  ).join('');
+  bindPersonDeleteButtons();
 }
 
 function saveTaskFromModal(orig, isEdit) {
@@ -1930,7 +2051,12 @@ function saveTaskFromModal(orig, isEdit) {
 
   if (t.type === '节奏-频率型') {
     t.frequencyPeriod = $('#ti-period').value;
-    t.overdueMultiplier = +$('#ti-mult').value || 1.5;
+    if (t.frequencyPeriod === '自定义天数') {
+      t.frequencyCustomDays = Math.max(1, +$('#ti-custom-days').value || 7);
+    } else {
+      delete t.frequencyCustomDays;
+    }
+    t.overdueMultiplier = 1.5;  // 固定 1.5,UI 不再让用户改
     if (!t.lastDoneAt) t.lastDoneAt = todayISO();
     delete t.dueDate; delete t.dueTime;
   } else if (t.type === '节奏-日期型') {

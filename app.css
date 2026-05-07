@@ -575,8 +575,36 @@ button { font-family: inherit; }
   display: flex !important; align-items: center; gap: 6px;
   font-size: 13px !important; color: var(--c-text) !important;
   margin: 0 !important; font-weight: 400 !important;
+  position: relative;
+  padding: 4px 6px; border-radius: 6px;
+  background: #fff;
 }
 .person-opt input { width: auto !important; margin: 0 !important; }
+.person-opt-name { flex: 0 1 auto; }
+.person-del {
+  margin-left: auto;
+  background: transparent; border: none;
+  color: var(--c-text-muted); font-size: 16px; line-height: 1;
+  cursor: pointer; padding: 2px 6px; border-radius: 4px;
+  font-family: inherit;
+}
+.person-del:hover, .person-del:active {
+  background: var(--c-red-soft); color: var(--c-red);
+}
+.person-add-row {
+  display: flex; gap: 4px; align-items: center;
+  margin-bottom: 8px;
+}
+.person-add-row input {
+  flex: 1; padding: 6px 10px;
+  border: 0.5px solid var(--c-border); border-radius: 6px;
+  font-family: inherit; font-size: 13px;
+}
+.person-add-row select {
+  padding: 6px 8px;
+  border: 0.5px solid var(--c-border); border-radius: 6px;
+  font-family: inherit; font-size: 13px; background: #fff;
+}
 .modal-body h3 { margin: 12px 0 6px; font-size: 14px; }
 .modal-actions {
   display: flex; gap: 8px; margin-top: 14px;
