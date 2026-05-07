@@ -188,9 +188,13 @@ window.AmandaFirebase = {
   },
 
   async pullAndSubscribe() {
-    const { getDocs, onSnapshot } = this._modules;
+    const { getDocs, onSnapshot, waitForPendingWrites } = this._modules;
     const A = window.AmandaTasks;
     if (!A) return;
+
+    // 启动时:先把上一次会话排队的写入(可能因为掉线/退出而没发出去)冲到服务器
+    try { await waitForPendingWrites(this.db); }
+    catch (e) { console.warn('[Sync] init waitForPendingWrites:', e.message); }
 
     // 1. 拉取并解密
     for (const stateKey of Object.keys(this.collMap)) {
@@ -203,7 +207,6 @@ window.AmandaFirebase = {
             const pt = await this.Crypto.decrypt(this.cryptoKey, { iv: data.iv, ct: data.ct });
             remoteItems.push(JSON.parse(pt));
           } else {
-            // 兼容历史明文
             delete data._syncedAt;
             remoteItems.push(data);
           }
@@ -211,14 +214,31 @@ window.AmandaFirebase = {
           console.warn(`[Sync] 解密失败 ${stateKey}/${d.id}:`, err.message);
         }
       }
-      if (remoteItems.length > 0) {
-        A.State[stateKey] = remoteItems;
-        A.Store.save(A.KEY[stateKey], remoteItems);
-        console.info(`[Sync] 拉取 ${stateKey}: ${remoteItems.length}`);
-      } else if (A.State[stateKey].length > 0) {
-        // 远端为空,把本地种子推上去(加密)
-        for (const item of A.State[stateKey]) await this._setEncrypted(stateKey, item);
-        console.info(`[Sync] 首次上传 ${stateKey}: ${A.State[stateKey].length}`);
+
+      // ❗ 关键改动:不再粗暴 A.State[stateKey] = remoteItems
+      // 而是按 ID 合并 — 远端有的用远端版本(可能是其他设备的更新),
+      // 本地独有的 ID 保留下来并推到服务器(防止离线编辑丢失)
+      const remoteIds = new Set(remoteItems.map(i => i.id));
+      const localItems = A.State[stateKey] || [];
+      const localOnly = localItems.filter(i => i.id && !remoteIds.has(i.id));
+
+      if (remoteItems.length > 0 || localOnly.length > 0) {
+        // 合并:远端 + 本地独有
+        A.State[stateKey] = [...remoteItems, ...localOnly];
+        A.Store.save(A.KEY[stateKey], A.State[stateKey]);
+        console.info(`[Sync] 合并 ${stateKey}: 远端 ${remoteItems.length} + 本地独有 ${localOnly.length}`);
+
+        // 把本地独有的项推到服务器(确保它们真的同步到云端)
+        for (const item of localOnly) {
+          try { await this._setEncrypted(stateKey, item); }
+          catch (e) { console.warn(`[Sync] 推 ${stateKey}/${item.id} 失败:`, e.message); }
+        }
+      } else if (localItems.length > 0) {
+        // 远端为空 + 本地有数据 → 首次上传
+        for (const item of localItems) {
+          try { await this._setEncrypted(stateKey, item); } catch {}
+        }
+        console.info(`[Sync] 首次上传 ${stateKey}: ${localItems.length}`);
       }
     }
     A.renderAll();
@@ -264,42 +284,24 @@ window.AmandaFirebase = {
     }
   },
 
-  /** 手动从云端拉取最新数据(用于 iPhone 切回前台时"踢一脚")*/
+  /** 手动刷新(切回前台/点设置里"立即刷新"用)
+   * 关键安全保证:先 waitForPendingWrites 把本地排队的写入全部冲到服务器,
+   * 然后才让 onSnapshot 自然处理远端变更,**不再做粗暴的 pull-and-replace**。
+   * 这样杜绝了"本地未同步的修改被云端旧数据覆盖"的数据丢失场景。
+   */
   async refresh() {
-    if (!this.ready || !this._firstSyncDone) return { ok: false };
-    const { getDocs } = this._modules;
-    const A = window.AmandaTasks;
-    if (!A) return { ok: false };
-    let totalChanged = 0;
-    this.applyingRemote = true;
+    if (!this.ready) return { ok: false };
+    const { waitForPendingWrites } = this._modules;
     try {
-      for (const stateKey of Object.keys(this.collMap)) {
-        const snap = await getDocs(this._coll(stateKey));
-        const remoteItems = [];
-        for (const d of snap.docs) {
-          const data = d.data();
-          try {
-            if (data.iv && data.ct) {
-              const pt = await this.Crypto.decrypt(this.cryptoKey, { iv: data.iv, ct: data.ct });
-              remoteItems.push(JSON.parse(pt));
-            } else { delete data._syncedAt; remoteItems.push(data); }
-          } catch {}
-        }
-        // 用 JSON 比较来识别是否有变化
-        const oldStr = JSON.stringify(A.State[stateKey]);
-        const newStr = JSON.stringify(remoteItems);
-        if (oldStr !== newStr) {
-          A.State[stateKey] = remoteItems;
-          A.Store.save(A.KEY[stateKey], remoteItems);
-          totalChanged++;
-        }
-      }
-      if (totalChanged > 0) {
-        A.captureSyncSnapshot?.();
-        A.renderAll();
-      }
-    } finally { this.applyingRemote = false; }
-    return { ok: true, changed: totalChanged };
+      await waitForPendingWrites(this.db);
+      // onSnapshot 已经在后台运行,会自动把任何远端变更带过来
+      // 我们只触发一次重渲染,确保 UI 反映最新状态
+      window.AmandaTasks?.renderAll();
+      return { ok: true, changed: 0, msg: '已同步,本地变更已上传' };
+    } catch (err) {
+      console.warn('[Sync] waitForPendingWrites 失败:', err.message);
+      return { ok: false, reason: 'wait-failed', error: err };
+    }
   },
 
   async _setEncrypted(stateKey, item) {
@@ -330,16 +332,47 @@ window.AmandaFirebase = {
     await setDoc(this._doc(stateKey, item.id), doc);
   },
 
+  pendingPushes: 0,
+
   async pushItem(stateKey, item) {
     if (!this.ready || this.applyingRemote || !this._firstSyncDone) return;
+    this.pendingPushes++;
+    this._updateSyncIndicator();
     try { await this._setEncrypted(stateKey, item); }
     catch (err) { console.error('[Sync] 写入失败:', err); }
+    finally { this.pendingPushes--; this._updateSyncIndicator(); }
   },
 
   async deleteItem(stateKey, id) {
     if (!this.ready || this.applyingRemote || !this._firstSyncDone) return;
+    this.pendingPushes++;
+    this._updateSyncIndicator();
     try { await this._modules.deleteDoc(this._doc(stateKey, id)); }
     catch (err) { console.error('[Sync] 删除失败:', err); }
+    finally { this.pendingPushes--; this._updateSyncIndicator(); }
+  },
+
+  _updateSyncIndicator() {
+    if (typeof document === 'undefined') return;
+    let el = document.getElementById('sync-indicator');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'sync-indicator';
+      document.body && document.body.appendChild(el);
+    }
+    if (this.pendingPushes > 0) {
+      el.textContent = `⏳ 保存中… (${this.pendingPushes})`;
+      el.className = 'syncing';
+    } else {
+      el.textContent = '✓ 已同步';
+      el.className = 'synced';
+      // 1.5 秒后淡出
+      clearTimeout(this._syncFadeTimer);
+      this._syncFadeTimer = setTimeout(() => {
+        el.classList.add('fade');
+      }, 1500);
+    }
+    el.classList.remove('fade');
   },
 
   shutdown() {

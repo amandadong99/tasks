@@ -658,6 +658,35 @@ button { font-family: inherit; }
 /* 延期菜单 */
 .postpone-list { display: flex; flex-direction: column; gap: 6px; }
 
+/* ---- 同步状态指示器 ---- */
+#sync-indicator {
+  position: fixed;
+  top: max(12px, env(safe-area-inset-top));
+  right: 14px;
+  z-index: 250;
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-weight: 500;
+  pointer-events: none;
+  transition: opacity .35s, transform .25s;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+#sync-indicator.syncing {
+  background: var(--c-amber-soft);
+  color: var(--c-amber-deep);
+  opacity: 1;
+}
+#sync-indicator.synced {
+  background: var(--c-green-soft);
+  color: var(--c-green-deep);
+  opacity: 1;
+}
+#sync-indicator.fade { opacity: 0; transform: translateY(-4px); }
+@media (min-width: 768px) {
+  #sync-indicator { right: calc(50% - 282px); }
+}
+
 /* ---- Toast ---- */
 #toast-root {
   position: fixed; top: 70px; left: 0; right: 0;
