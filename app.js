@@ -451,6 +451,15 @@ function getOverdueDays(task) {
 function getPersonById(id) { return State.persons.find(p => p.id === id); }
 function getPersonName(id) { const p = getPersonById(id); return p ? p.name : '?'; }
 
+/** 把 "YYYY-MM-DD" 解析成本地 Date(避免 UTC 解析造成的日期偏移)*/
+function parseLocalDate(s) {
+  if (!s) return null;
+  if (s instanceof Date) return s;
+  const [y, m, d] = s.split('-').map(Number);
+  if (!y || !m || !d) return null;
+  return new Date(y, m - 1, d);
+}
+
 /** 本周(周一-周日)结束日期的 ISO 字符串 */
 function endOfThisWeekISO() {
   const today = new Date(todayISO());
@@ -537,8 +546,8 @@ function isDuringActiveTrip(dateStr) {
   return State.trips.find(trip => {
     if (trip.status === '已完成') return false;
     if (!trip.autoVideoMeeting) return false;
-    return new Date(dateStr) >= new Date(trip.departureDate) &&
-           new Date(dateStr) <= new Date(trip.returnDate);
+    return parseLocalDate(dateStr) >= parseLocalDate(trip.departureDate) &&
+           parseLocalDate(dateStr) <= parseLocalDate(trip.returnDate);
   });
 }
 function decorateForVideo(task) {
@@ -767,25 +776,27 @@ function renderPeople() {
   const root = $('#people-content');
   const filter = State.ui.peopleFilter;
 
-  // 给每个人聚合任务(仅保留 overdueCount 用于"有逾期"筛选,不再用作排序/视觉强调)
+  // 给每个人聚合任务(任何 status 都算,这样过期已完成历史也能体现节奏)
   const cards = State.persons.map(p => {
-    const tasks = State.tasks.filter(t =>
-      t.relatedPerson?.includes(p.id) && t.status !== '已完成');
-    const overdueCount = tasks.filter(isOverdue).length;
-    const lastProgress = tasks
+    const allTasks = State.tasks.filter(t => t.relatedPerson?.includes(p.id));
+    const openTasks = allTasks.filter(t => t.status !== '已完成');
+    const lastProgress = allTasks
       .flatMap(t => (t.progressHistory || []).map(h => h.date))
       .sort().pop();
     const daysSince = lastProgress ? daysBetween(lastProgress, todayISO()) : 9999;
-    return { person: p, tasks, overdueCount, daysSince };
+    return { person: p, tasks: openTasks, allTasks, daysSince };
   });
 
-  // 过滤
+  // 类型过滤(全部 / 客户 / 团队 / 行业 / 个人)
   let filtered = cards;
-  if (filter === 'customer') filtered = cards.filter(c => c.person.type === '客户');
-  if (filter === 'team') filtered = cards.filter(c => c.person.type === '团队');
-  if (filter === 'overdue') filtered = cards.filter(c => c.overdueCount > 0);
+  if (filter && filter !== 'all') {
+    filtered = cards.filter(c => c.person.type === filter);
+  }
 
-  // 排序:重要客户 → 久没动(不再因有逾期而置顶,逾期专属今日视图)
+  // 只展示**至少有 1 个任务**关联的人物(无任务的人物从这个页面消失)
+  filtered = filtered.filter(c => c.allTasks.length > 0);
+
+  // 排序:重要客户 → 久没动
   filtered.sort((a, b) => {
     const ia = a.person.importance === '重要客户' ? 1 : 0;
     const ib = b.person.importance === '重要客户' ? 1 : 0;
@@ -793,62 +804,62 @@ function renderPeople() {
     return b.daysSince - a.daysSince;
   });
 
-  // 至少展示有任务的人;无任务的折叠在下方
-  const hasTasks = filtered.filter(c => c.tasks.length > 0);
-  const noTasks = filtered.filter(c => c.tasks.length === 0);
+  let html = filtered.map(personCard).join('');
 
-  // 未关联人任务
-  const unlinked = State.tasks.filter(t =>
-    (!t.relatedPerson || t.relatedPerson.length === 0) && t.status !== '已完成');
-
-  let html = '';
-  for (const c of hasTasks) html += personCard(c);
-
-  if (filter === 'all' || filter === 'overdue') {
-    if (unlinked.length) {
-      html += `<div class="unlinked-divider"></div>
-        <div class="section">
-          <div class="section-head">
-            <span class="section-title">未关联人 / 系统任务</span>
-            <span class="section-count">${unlinked.length}</span>
-          </div>
-          <div class="section-body">
-            ${unlinked.map(t => taskCard(t, { compact: true })).join('')}
-          </div>
-        </div>`;
-    }
+  if (!html) {
+    html = `<div class="empty">
+      <div class="empty-emoji">◉</div>
+      <div class="empty-title">${filter==='all'?'还没有关联人物的任务':`暂无类型为"${filter}"的人物`}</div>
+      <div class="empty-sub">在新建任务时勾选关联人,该人物会出现在这里</div>
+    </div>`;
   }
 
-  if (noTasks.length && filter === 'all') {
-    html += `<details class="people-empty">
-      <summary>暂无任务的相关人 (${noTasks.length})</summary>
-      <div class="people-empty-list">
-        ${noTasks.map(c => `<span class="person-pill">${escapeHtml(c.person.name)}</span>`).join('')}
-      </div>
-    </details>`;
-  }
-
-  if (!html) html = `<div class="empty">该筛选下没有任务</div>`;
   root.innerHTML = html;
   bindTaskCardEvents(root);
+
+  // 给每个人物卡的"+ 下次跟进"按钮绑事件
+  $$('[data-act="next-followup"]', root).forEach(b => {
+    b.onclick = (e) => {
+      e.stopPropagation();
+      const pid = b.dataset.pid;
+      const p = State.persons.find(x => x.id === pid);
+      // 直接打开新建任务弹窗,预填关联人 + 默认领域
+      openTaskModal(null, {
+        title: `跟进 ${p?.name || ''}`,
+        domain: p?.type === '团队' ? '内部与系统' :
+                p?.type === '个人' ? '家庭与个人' : '客户与销售',
+        type: '长期跟进',
+        relatedPerson: [pid],
+        priority: 'P1',
+        status: '进行中',
+      });
+    };
+  });
 }
 
-function personCard({ person, tasks, overdueCount, daysSince }) {
+function personCard({ person, tasks, daysSince }) {
   const tagText = [person.country, person.importance, person.note]
     .filter(Boolean).join(' · ');
-  // 不再因有逾期而加红边/红徽章 — 逾期视觉只保留在今日视图
+  const sortedTasks = sortByTime([...tasks].sort((a, b) =>
+    (a.dueDate || 'zzz').localeCompare(b.dueDate || 'zzz')));
+  const lastSeen = daysSince < 9999 ? `${daysSince} 天前推进过` : '无推进记录';
+
   return `<div class="person-card" data-pid="${person.id}">
     <div class="person-head">
       <div class="person-avatar">${escapeHtml(person.name.slice(0,1))}</div>
       <div class="person-info">
         <div class="person-name">${escapeHtml(person.name)}${person.company ? ` <span class="muted small">(${escapeHtml(person.company)})</span>` : ''}</div>
-        <div class="person-tag muted small">${escapeHtml(tagText) || '—'}</div>
+        <div class="person-tag muted small">${escapeHtml(tagText) || person.type || ''}</div>
+        <div class="person-tag muted small">${lastSeen}</div>
       </div>
       <div class="person-badge">${tasks.length} 项</div>
     </div>
     <div class="person-tasks">
-      ${tasks.map(t => taskCard(t, { compact: true })).join('')}
+      ${sortedTasks.map(t => taskCard(t, { compact: true })).join('')}
     </div>
+    <button class="btn btn-block btn-small person-followup" data-act="next-followup" data-pid="${person.id}">
+      + 设置下次跟进
+    </button>
   </div>`;
 }
 
@@ -1148,8 +1159,8 @@ function renderTrip() {
     const aFuture = a.departureDate >= today;
     const bFuture = b.departureDate >= today;
     if (aFuture !== bFuture) return aFuture ? -1 : 1;  // upcoming 先于 past
-    if (aFuture) return new Date(a.departureDate) - new Date(b.departureDate);  // 近的在前
-    return new Date(b.departureDate) - new Date(a.departureDate);  // past:最近的在前
+    if (aFuture) return parseLocalDate(a.departureDate) - parseLocalDate(b.departureDate);
+    return parseLocalDate(b.departureDate) - parseLocalDate(a.departureDate);
   });
 
   // 顶部工具条 + 视图切换
@@ -1265,11 +1276,9 @@ function renderTripCalendar(trips) {
 
 /** 给月内的出差按"类型 + 时间槽"分配渲染参数 */
 function _assignTripVisuals(monthTrips) {
-  // Sort by departure date ascending
   const sorted = [...monthTrips].sort((a, b) =>
-    new Date(a.departureDate) - new Date(b.departureDate));
+    parseLocalDate(a.departureDate) - parseLocalDate(b.departureDate));
 
-  // 同类型 → 渐浅色阶梯
   const typeIdx = {};
   for (const trip of sorted) {
     const tt = trip.tripType || 'visit';
@@ -1277,15 +1286,13 @@ function _assignTripVisuals(monthTrips) {
     trip._shadeIdx = typeIdx[tt]++;
   }
 
-  // 贪心区间调度 → 每个 trip 分配一个"行槽位"(0/1/2/...),
-  // 同槽位的 trips 时间不重叠
-  const slots = [];  // slots[i] = 该槽位最后一个 trip 的 returnDate
+  const slots = [];
   for (const trip of sorted) {
-    const dep = new Date(trip.departureDate);
+    const dep = parseLocalDate(trip.departureDate);
     let placed = false;
     for (let i = 0; i < slots.length; i++) {
       if (slots[i] < dep) {
-        slots[i] = new Date(trip.returnDate);
+        slots[i] = parseLocalDate(trip.returnDate);
         trip._slot = i;
         placed = true;
         break;
@@ -1293,7 +1300,7 @@ function _assignTripVisuals(monthTrips) {
     }
     if (!placed) {
       trip._slot = slots.length;
-      slots.push(new Date(trip.returnDate));
+      slots.push(parseLocalDate(trip.returnDate));
     }
   }
   return { maxSlot: slots.length, sorted };
@@ -1306,10 +1313,11 @@ function renderTripCalendarMonth(year, month, trips) {
   const numDays = lastDay.getDate();
   const todayStr = todayISO();
 
-  // 收集该月有重叠的出差
+  // 收集该月有重叠的出差(用本地日期解析,防止时区 bug)
   const monthTrips = trips.filter(t => {
-    const dep = new Date(t.departureDate);
-    const ret = new Date(t.returnDate);
+    const dep = parseLocalDate(t.departureDate);
+    const ret = parseLocalDate(t.returnDate);
+    if (!dep || !ret) return false;
     return ret >= firstDay && dep <= lastDay;
   });
 
@@ -1349,8 +1357,8 @@ function renderTripCalendarMonth(year, month, trips) {
   if (monthTrips.length) {
     html += `<div class="trip-cal-bars">`;
     monthTrips.forEach((trip) => {
-      const dep = new Date(trip.departureDate);
-      const ret = new Date(trip.returnDate);
+      const dep = parseLocalDate(trip.departureDate);
+      const ret = parseLocalDate(trip.returnDate);
       const startDay = dep < firstDay ? 1 : dep.getDate();
       const endDay = ret > lastDay ? numDays : ret.getDate();
       const startCellIdx = startWeekday + startDay - 1;
@@ -1919,6 +1927,8 @@ function openTaskModal(existing, defaults = {}) {
           <select id="ti-new-person-type">
             <option value="客户">客户</option>
             <option value="团队">团队</option>
+            <option value="行业">行业</option>
+            <option value="个人">个人</option>
           </select>
           <button type="button" id="ti-new-person-add" class="btn btn-mini">+ 添加</button>
         </div>

@@ -824,13 +824,17 @@ button { font-family: inherit; }
 .trip-cal-cell .trip-cal-num { pointer-events: auto; }
 .trip-cal-cell:nth-child(7n) { border-right: none; }
 .trip-cal-cell.empty { background: rgba(0,0,0,0.015); }
-.trip-cal-cell.is-today { background: var(--c-primary-soft); }
+/* 今天的日期用红色圆圈标记数字,不再用整格底色(避免遮挡行程色条)*/
 .trip-cal-cell.is-today .trip-cal-num {
-  color: var(--c-primary-deep); font-weight: 700;
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 20px; height: 20px; padding: 0 4px;
+  background: var(--c-red); color: #fff !important;
+  border-radius: 50%; font-weight: 700;
+  box-sizing: border-box;
 }
 .trip-cal-num {
   font-size: 11px; color: var(--c-text);
-  position: relative; z-index: 2;  /* 数字始终在色条之上 */
+  position: relative; z-index: 2;
 }
 .trip-cal-bars {
   position: absolute; left: 0; right: 0;
