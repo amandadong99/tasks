@@ -817,6 +817,14 @@ function renderPeople() {
   root.innerHTML = html;
   bindTaskCardEvents(root);
 
+  // 点人物卡头部 → 打开人物管理弹窗(编辑/删除)
+  $$('.person-head', root).forEach(el => {
+    el.onclick = () => {
+      const pid = el.closest('.person-card')?.dataset.pid;
+      if (pid) openPersonModal(pid);
+    };
+  });
+
   // 给每个人物卡的"+ 下次跟进"按钮绑事件
   $$('[data-act="next-followup"]', root).forEach(b => {
     b.onclick = (e) => {
@@ -837,6 +845,71 @@ function renderPeople() {
   });
 }
 
+/** 人物管理弹窗:编辑信息 / 删除人物 */
+function openPersonModal(pid) {
+  const p = State.persons.find(x => x.id === pid);
+  if (!p) return;
+  const usedBy = State.tasks.filter(t => t.relatedPerson?.includes(pid));
+
+  openModal({
+    title: '人物 · ' + p.name,
+    body: `
+      <label>姓名 <input id="pe-name" value="${escapeHtml(p.name)}"></label>
+      <div class="row">
+        <label class="flex1">类型
+          <select id="pe-type">
+            ${['客户','团队','行业','个人'].map(x =>
+              `<option ${p.type===x?'selected':''}>${x}</option>`).join('')}
+          </select>
+        </label>
+        <label class="flex1">重要度
+          <select id="pe-importance">
+            <option value="" ${!p.importance||p.importance==='普通客户'?'selected':''}>普通</option>
+            <option value="重要客户" ${p.importance==='重要客户'?'selected':''}>重要</option>
+          </select>
+        </label>
+      </div>
+      <div class="row">
+        <label class="flex1">公司 <input id="pe-company" value="${escapeHtml(p.company||'')}"></label>
+        <label class="flex1">国家/地区 <input id="pe-country" value="${escapeHtml(p.country||'')}"></label>
+      </div>
+      <label>备注 <input id="pe-note" value="${escapeHtml(p.note||'')}"></label>
+      <div class="muted small">当前关联 ${usedBy.length} 个任务</div>
+    `,
+    actions: [
+      { label: '取消', onClick: closeModal },
+      { label: '删除人物', danger: true, onClick: () => {
+        let msg = `确定删除人物 "${p.name}"?`;
+        if (usedBy.length) msg += `\n\n该人物还在 ${usedBy.length} 个任务里使用,删除后这些任务的关联会被自动清除(任务本身保留)。`;
+        if (!confirm(msg)) return;
+        if (usedBy.length) {
+          usedBy.forEach(t => { t.relatedPerson = t.relatedPerson.filter(id => id !== pid); });
+          persistTasks();
+        }
+        State.persons = State.persons.filter(x => x.id !== pid);
+        persistPersons();
+        closeModal();
+        renderAll();
+        toast('已删除人物');
+      }},
+      { label: '保存', primary: true, onClick: () => {
+        const newName = $('#pe-name').value.trim();
+        if (!newName) { toast('姓名不能为空'); return; }
+        p.name = newName;
+        p.type = $('#pe-type').value;
+        p.importance = $('#pe-importance').value || '普通客户';
+        p.company = $('#pe-company').value.trim();
+        p.country = $('#pe-country').value.trim();
+        p.note = $('#pe-note').value.trim();
+        persistPersons();
+        closeModal();
+        renderAll();
+        toast('已保存');
+      }},
+    ],
+  });
+}
+
 function personCard({ person, tasks, daysSince }) {
   const tagText = [person.country, person.importance, person.note]
     .filter(Boolean).join(' · ');
@@ -852,7 +925,7 @@ function personCard({ person, tasks, daysSince }) {
         <div class="person-tag muted small">${escapeHtml(tagText) || person.type || ''}</div>
         <div class="person-tag muted small">${lastSeen}</div>
       </div>
-      <div class="person-badge">${tasks.length} 项</div>
+      <div class="person-badge">${tasks.length} 项 ›</div>
     </div>
     <div class="person-tasks">
       ${sortedTasks.map(t => taskCard(t, { compact: true })).join('')}
@@ -1029,15 +1102,79 @@ function bindNotesFilter() {
 function noteCard(n) {
   const cat = NOTE_CATEGORIES[n.category] || NOTE_CATEGORIES.gray;
   const date = (n.updatedAt || n.createdAt || '').slice(5, 10).replace('-', '/');
-  const preview = (n.content || '').replace(/\n/g, ' ').slice(0, 100);
+  const preview = noteContentPreview(n.content).slice(0, 100);
+  const hasImage = /<img/i.test(n.content || '');
   return `<div class="note-card" data-nid="${n.id}" style="background:${cat.bg}">
     <div class="note-head">
       <span class="note-date" style="color:${cat.accent}">📅 ${date} · ${cat.name}</span>
       ${n.pinned ? '<span class="note-pin">📌</span>' : ''}
     </div>
     <div class="note-title">${escapeHtml(n.title || '(无标题)')}</div>
-    <div class="note-preview">${escapeHtml(preview) || '<span class="muted">空笔记</span>'}</div>
+    <div class="note-preview">${hasImage ? '🖼 ' : ''}${escapeHtml(preview) || '<span class="muted">空笔记</span>'}</div>
   </div>`;
+}
+
+/** 把图片文件压缩成 dataURL(最宽 maxW,JPEG quality)*/
+function compressImage(file, maxW = 800, quality = 0.7) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      let w = img.width, h = img.height;
+      if (w > maxW) { h = Math.round(h * maxW / w); w = maxW; }
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      try { resolve(canvas.toDataURL('image/jpeg', quality)); }
+      catch (e) { reject(e); }
+      URL.revokeObjectURL(img.src);
+    };
+    img.onerror = reject;
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+/** 选图 + 压缩 + 插入到 contenteditable 编辑器 */
+function pickAndInsertImage(editor) {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'image/*';
+  input.onchange = async () => {
+    const file = input.files[0];
+    if (!file) return;
+    try {
+      toast('正在压缩图片…');
+      const dataUrl = await compressImage(file, 800, 0.7);
+      editor.focus();
+      document.execCommand('insertImage', false, dataUrl);
+      toast('图片已插入');
+    } catch (e) {
+      toast('图片插入失败');
+      console.error(e);
+    }
+  };
+  input.click();
+}
+
+/** 把笔记内容(可能是 HTML 也可能是旧的纯文本)转成编辑器可用的 HTML */
+function noteContentToHTML(content) {
+  if (!content) return '';
+  // 检测是否含 HTML 标签
+  if (/<[a-z][\s\S]*>/i.test(content)) return content;
+  // 旧的纯文本:转义 + 换行变 <br>
+  return escapeHtml(content).replace(/\n/g, '<br>');
+}
+
+/** 从笔记 HTML 内容提取纯文本预览 */
+function noteContentPreview(content) {
+  if (!content) return '';
+  return content
+    .replace(/<br\s*\/?>/gi, ' ')
+    .replace(/<\/(p|div|h1|h2|li)>/gi, ' ')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 /** 阅读模式:点笔记卡片默认进这里,只展示内容 */
@@ -1053,7 +1190,7 @@ function openNoteReader(noteId) {
         <span class="note-cat-pill" style="background:${cat.bg};color:${cat.accent}">${escapeHtml(cat.name)}</span>
         ${n.pinned ? '<span class="muted small">📌 已置顶</span>' : ''}
       </div>
-      <div class="note-read-content">${escapeHtml(n.content || '') || '<span class="muted">(空内容)</span>'}</div>
+      <div class="note-read-content note-rich">${noteContentToHTML(n.content) || '<span class="muted">(空内容)</span>'}</div>
       <div class="muted small" style="margin-top:14px;padding-top:10px;border-top:0.5px dashed var(--c-border)">
         创建于 ${(n.createdAt || '').slice(0,16).replace('T',' ')}
         ${n.updatedAt && n.updatedAt !== n.createdAt
@@ -1101,7 +1238,25 @@ function openNoteModal(noteId) {
         <input type="checkbox" id="note-pin" ${n.pinned ? 'checked' : ''}>
         置顶笔记
       </label>
-      <label>正文 <textarea id="note-content" rows="10" style="resize:vertical">${escapeHtml(n.content)}</textarea></label>
+      <label>正文</label>
+      <div class="note-toolbar">
+        <button type="button" data-cmd="bold" title="加粗"><b>B</b></button>
+        <button type="button" data-cmd="italic" title="斜体"><i>I</i></button>
+        <button type="button" data-cmd="h1" title="一级标题">H1</button>
+        <button type="button" data-cmd="h2" title="二级标题">H2</button>
+        <button type="button" data-cmd="ul" title="项目符号">•</button>
+        <button type="button" data-cmd="ol" title="编号列表">1.</button>
+        <span class="note-toolbar-sep"></span>
+        <button type="button" class="note-tb-color" data-color="#E24B4A" style="background:#E24B4A" title="红"></button>
+        <button type="button" class="note-tb-color" data-color="#EF9F27" style="background:#EF9F27" title="橙"></button>
+        <button type="button" class="note-tb-color" data-color="#1D9E75" style="background:#1D9E75" title="绿"></button>
+        <button type="button" class="note-tb-color" data-color="#185FA5" style="background:#185FA5" title="蓝"></button>
+        <button type="button" class="note-tb-color" data-color="#7C3AED" style="background:#7C3AED" title="紫"></button>
+        <button type="button" class="note-tb-color" data-color="#1B1B1A" style="background:#1B1B1A" title="黑(恢复)"></button>
+        <span class="note-toolbar-sep"></span>
+        <button type="button" data-cmd="image" title="插入图片">📷</button>
+      </div>
+      <div id="note-content" class="note-editor" contenteditable="true"></div>
       <div class="muted small">
         创建于 ${(n.createdAt || '').slice(0, 16).replace('T', ' ')}<br>
         ${!isNew && n.updatedAt ? '最后修改 ' + n.updatedAt.slice(0, 16).replace('T', ' ') : ''}
@@ -1115,11 +1270,20 @@ function openNoteModal(noteId) {
         persistNotes(); closeModal(); renderNotes(); toast('已删除');
       }}] : []),
       { label: '保存', primary: true, onClick: () => {
+        const editor = $('#note-content');
+        const contentHTML = editor ? editor.innerHTML.trim() : '';
         n.title = $('#note-title').value.trim();
-        n.content = $('#note-content').value;
+        n.content = contentHTML;
         n.pinned = $('#note-pin').checked;
         n.updatedAt = new Date().toISOString();
-        if (!n.title && !n.content) { toast('标题或正文至少填一项'); return; }
+        if (!n.title && !noteContentPreview(contentHTML)) {
+          toast('标题或正文至少填一项'); return;
+        }
+        // 内容过大提示(Firestore 单文档 ~1MB,加密后更大)
+        const size = new Blob([contentHTML]).size;
+        if (size > 700 * 1024) {
+          if (!confirm(`此笔记内容较大(${Math.round(size/1024)}KB,可能含大图),会拖慢同步。\n建议图片压缩后再插入。仍要保存?`)) return;
+        }
         if (isNew) State.notes.push(n);
         else {
           const idx = State.notes.findIndex(x => x.id === n.id);
@@ -1131,7 +1295,11 @@ function openNoteModal(noteId) {
     ],
   });
 
-  // 颜色选择器交互
+  // 初始化富文本编辑器内容
+  const editor = $('#note-content');
+  if (editor) editor.innerHTML = noteContentToHTML(n.content);
+
+  // 颜色分类选择器交互
   $$('.note-color-chip', $('#modal-root')).forEach(b => {
     b.onclick = (e) => {
       e.preventDefault();
@@ -1141,6 +1309,30 @@ function openNoteModal(noteId) {
         x.classList.toggle('active', x.dataset.cat === n.category);
         x.style.borderColor = x.dataset.cat === n.category ? cat.accent : 'transparent';
       });
+    };
+  });
+
+  // 富文本工具栏交互
+  $$('.note-toolbar button', $('#modal-root')).forEach(btn => {
+    // mousedown 阻止默认,保持编辑器里的选区不丢失
+    btn.addEventListener('mousedown', e => e.preventDefault());
+    btn.onclick = (e) => {
+      e.preventDefault();
+      const ed = $('#note-content');
+      ed.focus();
+      // 颜色按钮
+      if (btn.classList.contains('note-tb-color')) {
+        document.execCommand('foreColor', false, btn.dataset.color);
+        return;
+      }
+      const cmd = btn.dataset.cmd;
+      if (cmd === 'bold') document.execCommand('bold');
+      else if (cmd === 'italic') document.execCommand('italic');
+      else if (cmd === 'h1') document.execCommand('formatBlock', false, 'h1');
+      else if (cmd === 'h2') document.execCommand('formatBlock', false, 'h2');
+      else if (cmd === 'ul') document.execCommand('insertUnorderedList');
+      else if (cmd === 'ol') document.execCommand('insertOrderedList');
+      else if (cmd === 'image') pickAndInsertImage(ed);
     };
   });
 }
