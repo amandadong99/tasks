@@ -1,11 +1,14 @@
 /* =====================================================================
- * Amanda 个人任务指挥台 v1.0
+ * Amanda 个人任务指挥台
  * 单文件主逻辑:数据层 + 视图渲染 + 交互
  * 数据存储:localStorage(默认) 或 Firebase Firestore(配置后)
  * ===================================================================== */
 
 (function () {
 'use strict';
+
+/* === 版本号(与 service-worker.js 的 CACHE_VERSION 保持一致)=== */
+const APP_VERSION = 'v4.7';
 
 /* ---------------------------------------------------------------------
  * 0. 工具函数
@@ -2494,6 +2497,15 @@ function renderGreeting() {
                 '晚上好,Amanda';
   $('.date-line').textContent = `${d.getFullYear()}年${d.getMonth()+1}月${d.getDate()}日 ${wd}`;
   $('.greet-line').textContent = greet;
+
+  // 在顶部 appbar 右下角显示版本号(放在齿轮按钮下方)
+  let verEl = document.getElementById('app-ver-tag');
+  if (!verEl) {
+    verEl = document.createElement('div');
+    verEl.id = 'app-ver-tag';
+    verEl.textContent = APP_VERSION;
+    $('#appbar')?.appendChild(verEl);
+  }
 }
 
 /* ---------------------------------------------------------------------
@@ -2541,8 +2553,15 @@ function openSettings() {
       <button class="btn btn-block" id="set-dedupe-notes" style="margin-top:6px">🧹 清理重复笔记</button>
       <button class="btn btn-block btn-danger" id="set-reset" style="margin-top:8px">重置本地数据(重新预填种子)</button>
 
-      <h3 style="margin-top:18px">关于</h3>
-      <div class="muted small">v1.0 · 单人个人任务工具 · 数据存于浏览器/Firebase</div>
+      <h3 style="margin-top:18px">关于 / 版本</h3>
+      <div class="version-row">
+        <div>
+          <div><b>App 版本</b> · <span id="set-app-ver">${APP_VERSION}</span></div>
+          <div class="muted small">SW 缓存版本 · <span id="set-sw-ver">读取中…</span></div>
+        </div>
+        <button class="btn btn-mini" id="set-check-update">↻ 检查更新</button>
+      </div>
+      <div class="muted small" style="margin-top:6px">单人个人任务工具 · 数据存于浏览器/Firebase</div>
     `,
     actions: [{ label: '关闭', onClick: closeModal }],
   });
@@ -2581,6 +2600,48 @@ function openSettings() {
   $('#set-reset').onclick = resetData;
   $('#set-dedupe-tasks').onclick = dedupeTasks;
   $('#set-dedupe-notes').onclick = dedupeNotes;
+
+  // 读 SW 当前版本号
+  if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+    const channel = new MessageChannel();
+    channel.port1.onmessage = (e) => {
+      const el = document.getElementById('set-sw-ver');
+      if (el) el.textContent = e.data?.version || '(未知)';
+    };
+    navigator.serviceWorker.controller.postMessage({ type: 'GET_VERSION' }, [channel.port2]);
+    // 超时回落
+    setTimeout(() => {
+      const el = document.getElementById('set-sw-ver');
+      if (el && el.textContent === '读取中…') el.textContent = '(超时,可能无 SW)';
+    }, 2000);
+  } else {
+    const el = document.getElementById('set-sw-ver');
+    if (el) el.textContent = '(Service Worker 未运行)';
+  }
+
+  // 手动检查更新
+  document.getElementById('set-check-update')?.addEventListener('click', async () => {
+    const btn = document.getElementById('set-check-update');
+    btn.textContent = '检查中…'; btn.disabled = true;
+    try {
+      const reg = await navigator.serviceWorker?.getRegistration();
+      if (!reg) { toast('Service Worker 未注册'); return; }
+      await reg.update();
+      // 看看有没有等待中的新版本
+      if (reg.waiting) {
+        toast('发现新版本,3 秒后自动应用…');
+        setTimeout(() => reg.waiting.postMessage({ type: 'SKIP_WAITING' }), 3000);
+      } else if (reg.installing) {
+        toast('正在下载新版本…稍候');
+      } else {
+        toast('已是最新版本 ✓');
+      }
+    } catch (e) {
+      toast('检查失败:' + e.message);
+    } finally {
+      btn.textContent = '↻ 检查更新'; btn.disabled = false;
+    }
+  });
 }
 
 async function requestNotificationPermission() {

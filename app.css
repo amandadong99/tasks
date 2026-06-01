@@ -660,6 +660,30 @@ button { font-family: inherit; }
 /* 延期菜单 */
 .postpone-list { display: flex; flex-direction: column; gap: 6px; }
 
+/* ---- 顶部小版本号标签 ---- */
+#app-ver-tag {
+  position: absolute;
+  right: 14px;
+  bottom: 4px;
+  font-size: 9px;
+  color: var(--c-text-muted);
+  opacity: 0.55;
+  letter-spacing: 0.5px;
+  pointer-events: none;
+  font-variant-numeric: tabular-nums;
+}
+#appbar { position: sticky; }  /* 让 abs 定位的版本号锚定到 appbar */
+.appbar-inner { position: relative; }
+
+/* 设置页版本行 */
+.version-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; margin-top: 6px;
+  padding: 8px 10px; background: #F8F7F2; border-radius: 8px;
+}
+.version-row > div:first-child { flex: 1; font-size: 12px; }
+.version-row > div:first-child b { font-size: 13px; }
+
 /* ---- 自动更新横幅(底部弹出)---- */
 #update-banner {
   position: fixed; left: 12px; right: 12px;
