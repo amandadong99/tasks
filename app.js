@@ -511,6 +511,39 @@ function rhythmStatus(task) {
   return { level: 'green', label: '节奏正常', days };
 }
 
+/** 判断节奏-频率型任务今天是否应在"今日"列表显示 */
+function frequencyDueToday(task) {
+  const today = new Date(todayISO());
+  const todayStr = todayISO();
+  const lastDoneStr = task.lastDoneAt || '';
+
+  // 今天已经完成过 → 不重复显示
+  if (lastDoneStr === todayStr) return false;
+
+  if (task.frequencyPeriod === '每天') {
+    return true;
+  }
+  if (task.frequencyPeriod === '每周') {
+    return today.getDay() === (task.weekday ?? -1);
+  }
+  if (task.frequencyPeriod === '每月') {
+    return today.getDate() === (task.monthDay ?? -1);
+  }
+  if (task.frequencyPeriod === '每季') {
+    const m = today.getMonth();  // 0=1月
+    if (![2, 5, 8, 11].includes(m)) return false;  // 3/6/9/12月
+    return today.getDate() === (task.quarterDay ?? -1);
+  }
+  if (task.frequencyPeriod === '自定义天数') {
+    if (!lastDoneStr) return true;
+    const days = task.frequencyCustomDays || 7;
+    const next = new Date(lastDoneStr);
+    next.setDate(next.getDate() + days);
+    return next <= today;
+  }
+  return false;
+}
+
 /* 判断节奏-日期型任务今天是否应触发 */
 function dateBasedTriggersToday(task) {
   const today = new Date(todayISO());
@@ -532,11 +565,17 @@ function generateDateBasedInstances() {
   // 若需要历史完成记录,可扩展 progressHistory。简化处理:
   // 给今日触发的日期型任务一个 dueDate=今天 的临时标记,不持久化。
   State.tasks.forEach(t => {
-    if (t.type === '节奏-日期型' && dateBasedTriggersToday(t)) {
-      // 仅当任务未完成或上次完成不是今天
-      if (!t.lastDoneAt || daysBetween(t.lastDoneAt, todayISO()) !== 0) {
+    if (t.type === '节奏-日期型') {
+      if (dateBasedTriggersToday(t) &&
+          (!t.lastDoneAt || daysBetween(t.lastDoneAt, todayISO()) !== 0)) {
         t._instanceDueToday = true;
+      } else {
+        t._instanceDueToday = false;
       }
+    }
+    // 节奏-频率型(支持选具体日,到期出现在今日)
+    if (t.type === '节奏-频率型') {
+      t._freqDueToday = frequencyDueToday(t);
     }
   });
 }
@@ -571,7 +610,11 @@ function renderToday() {
   // 4 类计数
   const overdue = State.tasks.filter(isOverdue);
   const todayTasks = State.tasks.filter(t =>
-    !isOverdue(t) && (isToday(t) || (t.type === '节奏-日期型' && t._instanceDueToday))
+    !isOverdue(t) && (
+      isToday(t) ||
+      (t.type === '节奏-日期型' && t._instanceDueToday) ||
+      (t.type === '节奏-频率型' && t._freqDueToday)
+    )
   );
   const tomorrowTasks = State.tasks.filter(t =>
     t.dueDate === tomorrowDate && t.status !== '已完成'
@@ -1877,10 +1920,11 @@ function markRhythmDone(tid) {
   const t = State.tasks.find(x => x.id === tid);
   if (!t) return;
   t.lastDoneAt = todayISO();
+  t._freqDueToday = false;  // 关闭今日实例,下个周期重新出现
   (t.progressHistory ||= []).push({ date: todayISO(), type: '推进', content: '完成一次,周期重置' });
   persistTasks();
   renderAll();
-  toast('已记录,周期重置');
+  toast('已完成 ✓ — 下次按周期再出现');
 }
 
 function openPostponeMenu(tid) {
@@ -2070,10 +2114,28 @@ function openTaskModal(existing, defaults = {}) {
               `<option ${t.frequencyPeriod===x?'selected':''}>${x}</option>`).join('')}
           </select>
         </label>
+        <div id="ti-freq-weekday-wrap" ${t.frequencyPeriod==='每周'?'':'hidden'}>
+          <label>每周几提醒
+            <select id="ti-freq-weekday">
+              ${['周日','周一','周二','周三','周四','周五','周六'].map((w,i)=>
+                `<option value="${i}" ${(t.weekday??1)===i?'selected':''}>${w}</option>`).join('')}
+            </select>
+          </label>
+        </div>
+        <div id="ti-freq-monthday-wrap" ${t.frequencyPeriod==='每月'?'':'hidden'}>
+          <label>每月几号提醒(1-28)
+            <input id="ti-freq-monthday" type="number" min="1" max="28" value="${t.monthDay||1}">
+          </label>
+        </div>
+        <div id="ti-freq-quarter-wrap" ${t.frequencyPeriod==='每季'?'':'hidden'}>
+          <label>每季末几号提醒(20-28,3/6/9/12 月)
+            <input id="ti-freq-quarterday" type="number" min="20" max="28" value="${t.quarterDay||28}">
+          </label>
+        </div>
         <div id="ti-custom-days-wrap" ${t.frequencyPeriod==='自定义天数'?'':'hidden'}>
           <label>每隔多少天 <input id="ti-custom-days" type="number" min="1" value="${t.frequencyCustomDays||7}"></label>
         </div>
-        <div class="muted small">"频率型"按"距上次完成的天数"提醒,在节奏 Tab 里显示。需要每天固定时间触发请用"节奏-日期型"。</div>
+        <div class="muted small">设置后任务会在到期那一天自动出现在"今日"列表。完成后下个周期再出现。</div>
       </div>
 
       <div id="ti-date-wrap" ${isDate?'':'hidden'}>
@@ -2144,9 +2206,13 @@ function openTaskModal(existing, defaults = {}) {
     $('#ti-date-wrap').hidden = v !== '节奏-日期型';
   });
 
-  // 频率型周期切换 → 显示/隐藏 自定义天数 输入框
+  // 频率型周期切换 → 显示对应的输入框
   $('#ti-period')?.addEventListener('change', e => {
-    $('#ti-custom-days-wrap').hidden = e.target.value !== '自定义天数';
+    const v = e.target.value;
+    $('#ti-freq-weekday-wrap').hidden  = v !== '每周';
+    $('#ti-freq-monthday-wrap').hidden = v !== '每月';
+    $('#ti-freq-quarter-wrap').hidden  = v !== '每季';
+    $('#ti-custom-days-wrap').hidden   = v !== '自定义天数';
   });
 
   // 日期型 模式切换 → 显示对应的"周几"或"几号"输入
@@ -2253,12 +2319,23 @@ function saveTaskFromModal(orig, isEdit) {
 
   if (t.type === '节奏-频率型') {
     t.frequencyPeriod = $('#ti-period').value;
-    if (t.frequencyPeriod === '自定义天数') {
+    // 根据周期保存对应的具体日字段
+    if (t.frequencyPeriod === '每周') {
+      t.weekday = +$('#ti-freq-weekday').value;
+      delete t.monthDay; delete t.quarterDay; delete t.frequencyCustomDays;
+    } else if (t.frequencyPeriod === '每月') {
+      t.monthDay = Math.min(28, Math.max(1, +$('#ti-freq-monthday').value || 1));
+      delete t.weekday; delete t.quarterDay; delete t.frequencyCustomDays;
+    } else if (t.frequencyPeriod === '每季') {
+      t.quarterDay = Math.min(28, Math.max(20, +$('#ti-freq-quarterday').value || 28));
+      delete t.weekday; delete t.monthDay; delete t.frequencyCustomDays;
+    } else if (t.frequencyPeriod === '自定义天数') {
       t.frequencyCustomDays = Math.max(1, +$('#ti-custom-days').value || 7);
-    } else {
-      delete t.frequencyCustomDays;
+      delete t.weekday; delete t.monthDay; delete t.quarterDay;
+    } else { // 每天
+      delete t.weekday; delete t.monthDay; delete t.quarterDay; delete t.frequencyCustomDays;
     }
-    t.overdueMultiplier = 1.5;  // 固定 1.5,UI 不再让用户改
+    t.overdueMultiplier = 1.5;
     if (!t.lastDoneAt) t.lastDoneAt = todayISO();
     delete t.dueDate; delete t.dueTime;
   } else if (t.type === '节奏-日期型') {

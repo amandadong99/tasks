@@ -2,7 +2,7 @@
  * Service Worker - 离线缓存 + Push 推送接收
  * ===================================================================== */
 
-const CACHE_VERSION = 'amanda-tasks-v4.4-richnote-persondel';
+const CACHE_VERSION = 'amanda-tasks-v4.5-freq-into-today';
 const CORE_FILES = [
   './',
   './index.html',
