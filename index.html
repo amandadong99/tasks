@@ -121,12 +121,61 @@
 <script src="firebase-config.js"></script>
 <script src="app.js"></script>
 <script>
-  // 注册 Service Worker(PWA + 推送)
+  // 注册 Service Worker(PWA + 推送 + 自动更新)
   if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => {
-      navigator.serviceWorker.register('service-worker.js')
-        .catch(err => console.warn('SW 注册失败:', err));
+    let _refreshing = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (_refreshing) return;
+      _refreshing = true;
+      window.location.reload();  // 新 SW 接管后自动刷新
     });
+
+    window.addEventListener('load', async () => {
+      try {
+        const reg = await navigator.serviceWorker.register('service-worker.js');
+
+        // 启动时立刻检查更新
+        reg.update().catch(() => {});
+
+        // 每 30 分钟自动检查一次新版本
+        setInterval(() => reg.update().catch(() => {}), 30 * 60 * 1000);
+
+        // 切回前台时也检查一次
+        document.addEventListener('visibilitychange', () => {
+          if (!document.hidden) reg.update().catch(() => {});
+        });
+
+        // 发现新 SW 安装就绪 → 显示横幅,让用户一键应用
+        const handleNewWorker = (worker) => {
+          if (!worker) return;
+          worker.addEventListener('statechange', () => {
+            if (worker.state === 'installed' && navigator.serviceWorker.controller) {
+              showUpdateBanner(worker);
+            }
+          });
+        };
+        if (reg.waiting) showUpdateBanner(reg.waiting);
+        reg.addEventListener('updatefound', () => handleNewWorker(reg.installing));
+      } catch (err) {
+        console.warn('SW 注册失败:', err);
+      }
+    });
+
+    function showUpdateBanner(worker) {
+      if (document.getElementById('update-banner')) return;
+      const banner = document.createElement('div');
+      banner.id = 'update-banner';
+      banner.innerHTML = `
+        <span>🎉 任务指挥台有新版本</span>
+        <button id="ub-apply">立即更新</button>
+        <button id="ub-dismiss">稍后</button>`;
+      document.body.appendChild(banner);
+      banner.querySelector('#ub-apply').onclick = () => {
+        worker.postMessage({ type: 'SKIP_WAITING' });
+        banner.querySelector('#ub-apply').textContent = '更新中…';
+      };
+      banner.querySelector('#ub-dismiss').onclick = () => banner.remove();
+    }
   }
 </script>
 

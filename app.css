@@ -660,6 +660,37 @@ button { font-family: inherit; }
 /* 延期菜单 */
 .postpone-list { display: flex; flex-direction: column; gap: 6px; }
 
+/* ---- 自动更新横幅(底部弹出)---- */
+#update-banner {
+  position: fixed; left: 12px; right: 12px;
+  bottom: calc(72px + env(safe-area-inset-bottom) + 8px);
+  z-index: 260;
+  background: var(--c-primary);
+  color: var(--c-primary-on);
+  padding: 10px 14px;
+  border-radius: 12px;
+  display: flex; align-items: center; gap: 8px;
+  box-shadow: 0 6px 20px rgba(140, 95, 0, 0.32);
+  animation: bannerUp .3s;
+  font-size: 13px;
+}
+#update-banner span { flex: 1; font-weight: 600; }
+#update-banner button {
+  background: rgba(0,0,0,0.18); color: var(--c-primary-on);
+  border: none; padding: 6px 12px; border-radius: 8px;
+  font-size: 12px; cursor: pointer; font-family: inherit;
+  font-weight: 600;
+}
+#update-banner button:active { transform: scale(0.95); }
+#update-banner #ub-dismiss { background: rgba(0,0,0,0.06); }
+@keyframes bannerUp {
+  from { transform: translateY(20px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+@media (min-width: 768px) {
+  #update-banner { left: 50%; transform: translateX(-50%); width: 480px; }
+}
+
 /* ---- 同步状态指示器 ---- */
 #sync-indicator {
   position: fixed;

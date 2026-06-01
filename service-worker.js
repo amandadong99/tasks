@@ -2,7 +2,7 @@
  * Service Worker - 离线缓存 + Push 推送接收
  * ===================================================================== */
 
-const CACHE_VERSION = 'amanda-tasks-v4.5-freq-into-today';
+const CACHE_VERSION = 'amanda-tasks-v4.6-auto-update';
 const CORE_FILES = [
   './',
   './index.html',
@@ -18,8 +18,15 @@ self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_VERSION)
       .then(cache => cache.addAll(CORE_FILES).catch(() => {}))
-      .then(() => self.skipWaiting())
+    // 不再自动 skipWaiting — 等页面收到"立即更新"指令再切
   );
+});
+
+// 接收页面发来的"立即激活新版本"指令
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
 });
 
 self.addEventListener('activate', (event) => {
