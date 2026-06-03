@@ -8,7 +8,7 @@
 'use strict';
 
 /* === 版本号(与 service-worker.js 的 CACHE_VERSION 保持一致)=== */
-const APP_VERSION = 'v4.7';
+const APP_VERSION = 'v4.8';
 
 /* ---------------------------------------------------------------------
  * 0. 工具函数
@@ -61,6 +61,17 @@ const KEY = {
   notes: 'amanda.notes',
   meta: 'amanda.meta',
   docKey: 'amanda.docKey',
+  dailyFocusShownAt: 'amanda.dailyFocusShownAt',
+};
+
+/** 工作日节奏:周一三五管理,周二四六销售,周日不提示 */
+const DAILY_FOCUS = {
+  1: { focus: '管理', emoji: '👥', sub: '复盘流程 · 团队推动 · 系统优化 · 招聘检查' },
+  2: { focus: '销售', emoji: '💼', sub: '客户跟进 · 报价 · 谈判 · 询盘回复' },
+  3: { focus: '管理', emoji: '👥', sub: '复盘流程 · 团队推动 · 系统优化 · 招聘检查' },
+  4: { focus: '销售', emoji: '💼', sub: '客户跟进 · 报价 · 谈判 · 询盘回复' },
+  5: { focus: '管理', emoji: '👥', sub: '复盘流程 · 团队推动 · 系统优化 · 招聘检查' },
+  6: { focus: '销售', emoji: '💼', sub: '客户跟进 · 报价 · 谈判 · 询盘回复' },
 };
 
 const NOTE_CATEGORIES = {
@@ -2486,6 +2497,40 @@ function updateBadges() {
   }
 }
 
+/** 工作日打开 App 弹"今日侧重"提示卡(每天只弹一次)*/
+function showDailyFocusReminder() {
+  const today = todayISO();
+  const shownAt = Store.load(KEY.dailyFocusShownAt, '');
+  if (shownAt === today) return;
+  const dow = new Date(today).getDay();
+  const info = DAILY_FOCUS[dow];
+  if (!info) return;  // 周日不弹
+  // 避免重复弹
+  if (document.getElementById('daily-focus-card')) return;
+
+  const dayNames = ['周日','周一','周二','周三','周四','周五','周六'];
+  const backdrop = document.createElement('div');
+  backdrop.id = 'daily-focus-backdrop';
+  const card = document.createElement('div');
+  card.id = 'daily-focus-card';
+  card.innerHTML = `
+    <div class="dfc-emoji">${info.emoji}</div>
+    <div class="dfc-day">${dayNames[dow]}</div>
+    <div class="dfc-title">今日侧重 · <span class="dfc-focus">${info.focus}</span></div>
+    <div class="dfc-sub">${info.sub}</div>
+    <button class="btn btn-primary btn-block" id="dfc-ok">明白了 ✓</button>
+  `;
+  document.body.appendChild(backdrop);
+  document.body.appendChild(card);
+  const dismiss = () => {
+    Store.save(KEY.dailyFocusShownAt, today);
+    card.remove();
+    backdrop.remove();
+  };
+  card.querySelector('#dfc-ok').onclick = dismiss;
+  backdrop.onclick = dismiss;
+}
+
 function renderGreeting() {
   const d = new Date();
   const wd = ['周日','周一','周二','周三','周四','周五','周六'][d.getDay()];
@@ -3011,6 +3056,9 @@ function init() {
     captureSyncSnapshot();
     Lock.checkAndPrompt().catch(e => console.warn('[Lock] error', e));
   }
+
+  // 工作日提示卡(每天弹一次)— 延迟 800ms 避开锁屏
+  setTimeout(showDailyFocusReminder, 800);
 }
 
 document.addEventListener('DOMContentLoaded', init);

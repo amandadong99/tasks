@@ -684,6 +684,50 @@ button { font-family: inherit; }
 .version-row > div:first-child { flex: 1; font-size: 12px; }
 .version-row > div:first-child b { font-size: 13px; }
 
+/* ---- 工作日"今日侧重"提示卡 ---- */
+#daily-focus-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.32);
+  z-index: 270;
+  animation: fadeIn .25s;
+}
+#daily-focus-card {
+  position: fixed;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  background: #fff;
+  padding: 26px 24px 22px;
+  border-radius: 20px;
+  box-shadow: 0 14px 46px rgba(0,0,0,0.28);
+  z-index: 271;
+  width: 86%; max-width: 320px;
+  text-align: center;
+  animation: focusPop .35s;
+}
+@keyframes focusPop {
+  from { transform: translate(-50%, -50%) scale(0.75); opacity: 0; }
+  to { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+}
+.dfc-emoji {
+  font-size: 50px; line-height: 1; margin-bottom: 6px;
+}
+.dfc-day {
+  font-size: 12px; color: var(--c-text-muted);
+  margin-bottom: 2px;
+}
+.dfc-title {
+  font-size: 19px; font-weight: 700; margin-bottom: 8px; color: var(--c-text);
+}
+.dfc-focus {
+  color: var(--c-primary-deep);
+  background: var(--c-primary-soft);
+  padding: 2px 10px; border-radius: 10px;
+}
+.dfc-sub {
+  font-size: 13px; color: var(--c-text-muted);
+  margin-bottom: 18px; line-height: 1.6;
+}
+
 /* ---- 自动更新横幅(底部弹出)---- */
 #update-banner {
   position: fixed; left: 12px; right: 12px;
