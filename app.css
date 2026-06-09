@@ -728,6 +728,30 @@ button { font-family: inherit; }
   margin-bottom: 18px; line-height: 1.6;
 }
 
+/* ---- 通知授权 opt-in 小条 ---- */
+#notif-optin {
+  position: fixed; left: 12px; right: 12px;
+  bottom: calc(72px + env(safe-area-inset-bottom) + 8px);
+  z-index: 250;
+  background: #1B1B1A; color: #fff;
+  padding: 10px 12px; border-radius: 12px;
+  display: flex; align-items: center; gap: 8px;
+  box-shadow: 0 4px 18px rgba(0,0,0,0.3);
+  animation: bannerUp .3s;
+  font-size: 12px;
+}
+#notif-optin span { flex: 1; }
+#notif-optin button {
+  background: var(--c-primary); color: var(--c-primary-on);
+  border: none; padding: 6px 12px; border-radius: 8px;
+  font-size: 12px; cursor: pointer; font-family: inherit;
+  font-weight: 600;
+}
+#notif-optin #noi-no { background: rgba(255,255,255,0.15); color: #fff; }
+@media (min-width: 768px) {
+  #notif-optin { left: 50%; transform: translateX(-50%); width: 480px; }
+}
+
 /* ---- 自动更新横幅(底部弹出)---- */
 #update-banner {
   position: fixed; left: 12px; right: 12px;

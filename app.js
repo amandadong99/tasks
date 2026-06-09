@@ -8,7 +8,7 @@
 'use strict';
 
 /* === 版本号(与 service-worker.js 的 CACHE_VERSION 保持一致)=== */
-const APP_VERSION = 'v4.8';
+const APP_VERSION = 'v4.9';
 
 /* ---------------------------------------------------------------------
  * 0. 工具函数
@@ -2469,6 +2469,8 @@ function renderCurrentView() {
   else if (tab === 'rhythm') renderRhythm();
   else if (tab === 'trip') renderTrip();
   else if (tab === 'notes') renderNotes();
+  // 每次切换/渲染任何视图都同步徽章(不只是今日)
+  updateBadges();
 }
 
 function renderAll() {
@@ -2483,18 +2485,67 @@ function updateBadges() {
 
   // App内 Tab 徽章
   const badge = $('#badge-today');
-  if (todayN > 0) { badge.hidden = false; badge.textContent = todayN; }
-  else { badge.hidden = true; }
-
-  // iPhone 主屏图标徽章(iOS 16.4+ PWA Badging API)
-  // 需要用户先授权通知;已加到主屏后才会显示
-  if ('setAppBadge' in navigator) {
-    if (todayN > 0) {
-      navigator.setAppBadge(todayN).catch(() => {});
-    } else {
-      navigator.clearAppBadge().catch(() => {});
-    }
+  if (badge) {
+    if (todayN > 0) { badge.hidden = false; badge.textContent = todayN; }
+    else { badge.hidden = true; }
   }
+
+  // iPhone / 桌面主屏图标徽章(W3C Badging API)
+  // 失败原因记录到 window._badgeError,便于诊断
+  if ('setAppBadge' in navigator) {
+    const op = todayN > 0
+      ? navigator.setAppBadge(todayN)
+      : navigator.clearAppBadge();
+    op.then(() => {
+      window._badgeError = null;
+    }).catch(err => {
+      window._badgeError = err?.message || String(err);
+      console.warn('[Badge] setAppBadge 失败 — 通常是因为通知权限未授权:', err);
+    });
+  } else {
+    window._badgeError = 'API 不支持(浏览器太旧)';
+  }
+}
+
+/** 首次在 PWA 模式打开时,如果通知权限从未授权过,弹一个温和提示
+ *  让用户选择是否开启。点了"开启"才能在用户手势下触发 iOS 系统授权框。
+ */
+function maybeOfferNotificationOptIn() {
+  if (!('Notification' in window)) return;
+  if (Notification.permission !== 'default') return;  // 已 granted/denied 都不弹
+  const isStandalone = window.matchMedia('(display-mode: standalone)').matches ||
+                       window.navigator.standalone === true;
+  if (!isStandalone) return;  // 必须 PWA 主屏模式
+
+  // 不要太频繁,同一天只弹一次
+  const today = todayISO();
+  const shownAt = Store.load('amanda.notifOptInShownAt', '');
+  if (shownAt === today) return;
+  Store.save('amanda.notifOptInShownAt', today);
+
+  const banner = document.createElement('div');
+  banner.id = 'notif-optin';
+  banner.innerHTML = `
+    <span>🔔 开启通知后,主屏图标将显示待办数字</span>
+    <button id="noi-yes">开启</button>
+    <button id="noi-no">稍后</button>
+  `;
+  document.body.appendChild(banner);
+  banner.querySelector('#noi-yes').onclick = async () => {
+    banner.remove();
+    try {
+      const p = await Notification.requestPermission();
+      if (p === 'granted') {
+        updateBadges();
+        // 也注册推送订阅(如果 Firebase 已就位)
+        window.AmandaFirebase?.subscribePush?.().catch(() => {});
+        toast('已授权 — 主屏图标会显示徽章 ✓');
+      } else {
+        toast('未授权 — 之后可在设置里重试');
+      }
+    } catch (e) { toast('授权请求失败:' + e.message); }
+  };
+  banner.querySelector('#noi-no').onclick = () => banner.remove();
 }
 
 /** 工作日打开 App 弹"今日侧重"提示卡(每天只弹一次)*/
@@ -2745,24 +2796,43 @@ async function runBadgeDiagnostic() {
     }, 2500);
   }
 
+  // 给出具体修复指引
+  let advice = '';
+  if (notifPerm !== 'granted') {
+    advice = '👉 通知权限未授权 — 这就是徽章不显示的原因。\n' +
+             '   解决:点 "授权通知" 按钮 → iOS 弹框时点"允许"。\n' +
+             '   如果"已拒绝"无法重新弹框,需要删除主屏图标 + 清 Safari 网站数据后重新添加。';
+  } else if (!isStandalone) {
+    advice = '👉 你不是从主屏图标启动的 App — iOS 必须从主屏启动才能给 PWA 显示徽章。\n' +
+             '   解决:退出 App,从主屏点向日葵图标重新打开。';
+  } else if (!hasBadgeAPI) {
+    advice = '👉 当前浏览器不支持 setAppBadge API — iOS Safari 需要 ≥16.4。';
+  } else if (window._badgeError) {
+    advice = '👉 setAppBadge 调用失败: ' + window._badgeError + '\n' +
+             '   通常是 iOS 设置 → 通知 → 任务指挥台 → "标记" 开关被关闭,打开它。';
+  } else {
+    advice = '✓ 所有条件都满足。如果主屏仍无红点,试:\n' +
+             '   1. 锁屏一次再亮屏\n' +
+             '   2. iOS 设置 → 通知 → 任务指挥台 → "标记"开关确保是开的\n' +
+             '   3. 重启 iPhone(iOS 偶尔出 bug)';
+  }
+
   const report = `
 🔍 主屏徽章诊断
 ━━━━━━━━━━━━━━━━━━━━━━━
 
-iOS 设备: ${isIOS ? '是' : '否(${ua.slice(0,40)})'}
+iOS 设备: ${isIOS ? '是' : '否'}
 iOS 版本: ${iosVer} ${isIOS && iosMatch ? (parseInt(iosMatch[1]) > 16 || (parseInt(iosMatch[1]) === 16 && parseInt(iosMatch[2]) >= 4) ? '✓' : '✗ 需 ≥ 16.4') : ''}
 
 PWA 主屏模式: ${isStandalone ? '✓ 是' : '✗ 否(必须从主屏图标启动)'}
 setAppBadge API: ${hasBadgeAPI ? '✓ 浏览器支持' : '✗ 不支持'}
-通知权限: ${notifPerm === 'granted' ? '✓ 已授权' : (notifPerm === 'denied' ? '✗ 已拒绝' : '○ 未授权')}
+通知权限: ${notifPerm === 'granted' ? '✓ 已授权' : (notifPerm === 'denied' ? '✗ 已拒绝' : '○ 未授权(从未询问)')}
 
 设置徽章测试(应显示99):
   ${setBadgeResult}
 
 ━━━━━━━━━━━━━━━━━━━━━━━
-${isStandalone && hasBadgeAPI && notifPerm === 'granted'
-  ? '⚠️ 所有条件都满足。如果主屏仍无红点,试:\n1. 锁屏一次再亮屏\n2. 删主屏图标重新添加\n3. iOS 系统bug,重启iPhone'
-  : '❌ 上面的 ✗ 项就是阻塞原因'}
+${advice}
   `.trim();
 
   alert(report);
@@ -3037,9 +3107,13 @@ function init() {
     renderCurrentView();
   }, 60000);
 
-  // 切回前台时主动从云端拉一次最新数据(iOS PWA 后台时连接可能被挂起)
+  // 切回前台:刷新徽章 + 从云端拉一次最新数据
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden && window.AmandaFirebase?.ready) {
+    if (document.hidden) return;
+    // 1. 立刻刷新主屏徽章(不依赖 Firebase 状态)
+    updateBadges();
+    // 2. 如果 Firebase 在线,拉最新数据
+    if (window.AmandaFirebase?.ready) {
       window.AmandaFirebase.refresh?.().then(r => {
         if (r?.changed > 0) {
           console.info('[Sync] 切回前台:同步了', r.changed, '类变更');
@@ -3059,6 +3133,9 @@ function init() {
 
   // 工作日提示卡(每天弹一次)— 延迟 800ms 避开锁屏
   setTimeout(showDailyFocusReminder, 800);
+
+  // 首次在 iPhone PWA 打开时,提示开启通知(为了主屏徽章)
+  setTimeout(maybeOfferNotificationOptIn, 1500);
 }
 
 document.addEventListener('DOMContentLoaded', init);
