@@ -2,7 +2,7 @@
  * Service Worker - 离线缓存 + Push 推送接收
  * ===================================================================== */
 
-const CACHE_VERSION = 'amanda-tasks-v4.9-badge-optin';
+const CACHE_VERSION = 'amanda-tasks-v5.1-holidays-2035';
 const CORE_FILES = [
   './',
   './index.html',

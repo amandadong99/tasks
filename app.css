@@ -854,6 +854,28 @@ button { font-family: inherit; }
   color: rgba(0,0,0,0.65);
   display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden;
 }
+/* 富文本预览:保留格式,但缩小标题以适应卡片 */
+.note-rich-preview h1, .note-rich-preview h2 {
+  font-size: 13px !important;
+  font-weight: 700 !important;
+  margin: 0 !important;
+  line-height: 1.4 !important;
+  color: inherit;
+}
+.note-rich-preview ul, .note-rich-preview ol {
+  margin: 0; padding-left: 16px;
+}
+.note-rich-preview p, .note-rich-preview div { margin: 0; }
+.note-rich-preview b, .note-rich-preview strong { font-weight: 700; }
+.note-rich-preview i, .note-rich-preview em { font-style: italic; }
+.note-rich-preview li { margin: 0; }
+.note-img-pill {
+  display: inline-block;
+  padding: 0 4px;
+  background: rgba(0,0,0,0.08);
+  border-radius: 3px;
+  font-size: 11px;
+}
 .note-colors {
   display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px;
 }
@@ -1018,6 +1040,24 @@ button { font-family: inherit; }
   font-size: 11px; color: var(--c-text);
   position: relative; z-index: 2;
 }
+/* 节假日小标签:贴在日期数字下方,红色淡背景 */
+.trip-cal-holiday {
+  position: absolute;
+  top: 18px; left: 2px; right: 2px;
+  font-size: 9px;
+  font-weight: 600;
+  color: #B91C1C;
+  background: rgba(254, 226, 226, 0.85);
+  border-radius: 3px;
+  padding: 0 2px;
+  text-align: center;
+  pointer-events: none;
+  z-index: 3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.trip-cal-cell.is-holiday .trip-cal-num { color: #B91C1C; font-weight: 600; }
 .trip-cal-bars {
   position: absolute; left: 0; right: 0;
   top: 0; bottom: 0;

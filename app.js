@@ -8,7 +8,7 @@
 'use strict';
 
 /* === 版本号(与 service-worker.js 的 CACHE_VERSION 保持一致)=== */
-const APP_VERSION = 'v4.9';
+const APP_VERSION = 'v5.1';
 
 /* ---------------------------------------------------------------------
  * 0. 工具函数
@@ -99,6 +99,91 @@ const REMINDER_PRESETS = [
 function reminderLabel(min) {
   return REMINDER_PRESETS.find(p => p.minutes === min)?.label || `${min} 分钟前`;
 }
+
+/** 中国法定节假日(2026-2035,共 10 年)
+ *  说明:仅标节日正日,不含国务院每年 12 月公布的调休补休日
+ */
+const CN_HOLIDAYS = {
+  // === 2026 ===
+  '2026-01-01': '元旦',
+  '2026-02-17': '春节',
+  '2026-04-05': '清明',
+  '2026-05-01': '劳动节',
+  '2026-06-19': '端午',
+  '2026-09-25': '中秋',
+  '2026-10-01': '国庆',
+  // === 2027 ===
+  '2027-01-01': '元旦',
+  '2027-02-06': '春节',
+  '2027-04-05': '清明',
+  '2027-05-01': '劳动节',
+  '2027-06-09': '端午',
+  '2027-09-15': '中秋',
+  '2027-10-01': '国庆',
+  // === 2028 ===
+  '2028-01-01': '元旦',
+  '2028-01-26': '春节',
+  '2028-04-04': '清明',
+  '2028-05-01': '劳动节',
+  '2028-05-28': '端午',
+  '2028-10-03': '中秋',
+  '2028-10-01': '国庆',
+  // === 2029 ===
+  '2029-01-01': '元旦',
+  '2029-02-13': '春节',
+  '2029-04-05': '清明',
+  '2029-05-01': '劳动节',
+  '2029-06-16': '端午',
+  '2029-09-22': '中秋',
+  '2029-10-01': '国庆',
+  // === 2030 ===
+  '2030-01-01': '元旦',
+  '2030-02-03': '春节',
+  '2030-04-05': '清明',
+  '2030-05-01': '劳动节',
+  '2030-06-05': '端午',
+  '2030-09-12': '中秋',
+  '2030-10-01': '国庆',
+  // === 2031 ===
+  '2031-01-01': '元旦',
+  '2031-01-23': '春节',
+  '2031-04-05': '清明',
+  '2031-05-01': '劳动节',
+  '2031-06-24': '端午',
+  '2031-10-01': '中秋·国庆',  // 中秋恰逢国庆当日
+  // === 2032 ===
+  '2032-01-01': '元旦',
+  '2032-02-11': '春节',
+  '2032-04-04': '清明',
+  '2032-05-01': '劳动节',
+  '2032-06-12': '端午',
+  '2032-09-19': '中秋',
+  '2032-10-01': '国庆',
+  // === 2033 ===
+  '2033-01-01': '元旦',
+  '2033-01-31': '春节',
+  '2033-04-04': '清明',
+  '2033-05-01': '劳动节',
+  '2033-06-01': '端午',
+  '2033-09-08': '中秋',
+  '2033-10-01': '国庆',
+  // === 2034 ===
+  '2034-01-01': '元旦',
+  '2034-02-19': '春节',
+  '2034-04-05': '清明',
+  '2034-05-01': '劳动节',
+  '2034-06-20': '端午',
+  '2034-09-27': '中秋',
+  '2034-10-01': '国庆',
+  // === 2035 ===
+  '2035-01-01': '元旦',
+  '2035-02-08': '春节',
+  '2035-04-05': '清明',
+  '2035-05-01': '劳动节',
+  '2035-06-10': '端午',
+  '2035-09-16': '中秋',
+  '2035-10-01': '国庆',
+};
 
 const TRIP_TYPES = {
   paidExpo: { name: '付费展会', color: '#F59E0B', shades: ['#F59E0B', '#FBBF24', '#FCD34D', '#FDE68A'], soft: '#FEF3C7' },
@@ -1159,15 +1244,16 @@ function bindNotesFilter() {
 function noteCard(n) {
   const cat = NOTE_CATEGORIES[n.category] || NOTE_CATEGORIES.gray;
   const date = (n.updatedAt || n.createdAt || '').slice(5, 10).replace('-', '/');
-  const preview = noteContentPreview(n.content).slice(0, 100);
-  const hasImage = /<img/i.test(n.content || '');
+  // 富文本预览:保留所有格式,仅把图片替换成🖼避免预览过大
+  const previewHTML = (n.content || '').replace(/<img[^>]*>/gi, '<span class="note-img-pill">🖼</span>');
+  const isEmpty = !noteContentPreview(n.content).trim();
   return `<div class="note-card" data-nid="${n.id}" style="background:${cat.bg}">
     <div class="note-head">
       <span class="note-date" style="color:${cat.accent}">📅 ${date} · ${cat.name}</span>
       ${n.pinned ? '<span class="note-pin">📌</span>' : ''}
     </div>
     <div class="note-title">${escapeHtml(n.title || '(无标题)')}</div>
-    <div class="note-preview">${hasImage ? '🖼 ' : ''}${escapeHtml(preview) || '<span class="muted">空笔记</span>'}</div>
+    <div class="note-preview note-rich-preview">${isEmpty ? '<span class="muted">空笔记</span>' : previewHTML}</div>
   </div>`;
 }
 
@@ -1596,8 +1682,10 @@ function renderTripCalendarMonth(year, month, trips) {
     }
     const dateStr = `${year}-${String(month+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
     const isToday = dateStr === todayStr;
-    html += `<div class="trip-cal-cell ${isToday ? 'is-today' : ''}">
+    const holiday = CN_HOLIDAYS[dateStr];
+    html += `<div class="trip-cal-cell ${isToday ? 'is-today' : ''}${holiday ? ' is-holiday' : ''}">
       <div class="trip-cal-num">${day}</div>
+      ${holiday ? `<div class="trip-cal-holiday">${escapeHtml(holiday)}</div>` : ''}
     </div>`;
   }
 
