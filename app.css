@@ -101,6 +101,7 @@ button { font-family: inherit; }
 .stat.on.stat-tomorrow { background: var(--c-amber-soft); border-color: var(--c-amber); }
 .stat.on.stat-tomorrow .stat-num { color: var(--c-amber-deep); }
 .stat-done { color: var(--c-green-deep); }
+.stat-all .stat-num { color: var(--c-text); }
 /* 当前激活的卡片(被点中,正在过滤)用主黄色加粗描边 */
 .stat.active {
   border: 2px solid var(--c-primary);

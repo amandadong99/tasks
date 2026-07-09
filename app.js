@@ -8,7 +8,7 @@
 'use strict';
 
 /* === 版本号(与 service-worker.js 的 CACHE_VERSION 保持一致)=== */
-const APP_VERSION = 'v5.1';
+const APP_VERSION = 'v5.2';
 
 /* ---------------------------------------------------------------------
  * 0. 工具函数
@@ -718,8 +718,12 @@ function renderToday() {
   const tomorrowTasks = State.tasks.filter(t =>
     t.dueDate === tomorrowDate && t.status !== '已完成'
   );
-  const done = State.tasks.filter(t => t.status === '已完成' &&
-    t.completedAt && t.completedAt.slice(0, 10) === todayISO());
+  // 所有未完成的待办(不含节奏型,那些在长期 Tab 有专属展示)
+  const allOpen = State.tasks.filter(t =>
+    t.status !== '已完成' &&
+    t.type !== '节奏-频率型' &&
+    t.type !== '节奏-日期型'
+  );
 
   // 顶部 4 个可点击数字卡
   stats.innerHTML = `
@@ -732,8 +736,8 @@ function renderToday() {
     <button class="stat stat-tomorrow ${tomorrowTasks.length ? 'on' : ''} ${filter==='tomorrow'?'active':''}" data-stat-filter="tomorrow">
       <div class="stat-num">${tomorrowTasks.length}</div><div class="stat-label">明天</div>
     </button>
-    <button class="stat stat-done ${filter==='done'?'active':''}" data-stat-filter="done">
-      <div class="stat-num">${done.length}</div><div class="stat-label">已完成</div>
+    <button class="stat stat-all ${filter==='all'?'active':''}" data-stat-filter="all">
+      <div class="stat-num">${allOpen.length}</div><div class="stat-label">所有</div>
     </button>`;
 
   // 数字卡点击切换 filter(再次点同一张卡返回默认视图)
@@ -801,23 +805,51 @@ function renderToday() {
     }
   }
 
-  // FILTER: done(今日已完成,按完成时间倒序)
-  else if (filter === 'done') {
-    const sortedDone = [...done].sort((a, b) =>
-      (b.completedAt || '').localeCompare(a.completedAt || ''));
-    if (!sortedDone.length) {
-      html = renderEmpty('✓', '今天还没完成任务', '完成了点 ○ 标记打勾');
+  // FILTER: all(所有未完成待办 — 超期红区 + 按领域分组)
+  else if (filter === 'all') {
+    if (!allOpen.length) {
+      html = renderEmpty('☀', '所有待办都完成了', '真棒 ✓');
     } else {
-      html = `<div class="section">
-        <div class="section-bar" style="background:var(--c-green)"></div>
-        <div class="section-head">
-          <span class="section-title">今日已完成</span>
-          <span class="section-count">${sortedDone.length}</span>
-        </div>
-        <div class="section-body">
-          ${sortedDone.map(t => taskCard(t)).join('')}
-        </div>
-      </div>`;
+      // 排序:未逾期按 dueDate 升序,无日期最后
+      const sortedAll = [...allOpen].sort((a, b) => {
+        const aOv = isOverdue(a), bOv = isOverdue(b);
+        if (aOv !== bOv) return aOv ? -1 : 1;
+        const aD = a.dueDate || 'zzz';
+        const bD = b.dueDate || 'zzz';
+        return aD.localeCompare(bD);
+      });
+      // 超期红区置顶
+      const overdueAll = sortedAll.filter(isOverdue);
+      if (overdueAll.length) {
+        html += `<div class="section section-overdue">
+          <div class="section-bar bar-red"></div>
+          <div class="section-head">
+            <span class="section-title">超期 · 不会自动消失</span>
+            <span class="section-count">${overdueAll.length}</span>
+          </div>
+          <div class="section-body">
+            ${overdueAll.map(t => taskCard(t, { overdue: true })).join('')}
+          </div>
+        </div>`;
+      }
+      // 非超期任务按 3 个领域分组
+      const nonOverdue = sortedAll.filter(t => !isOverdue(t));
+      for (const d of DOMAINS) {
+        const items = nonOverdue.filter(t => t.domain === d);
+        if (!items.length) continue;
+        html += renderDomainSection(d, items);
+      }
+      // 兜底:未知领域
+      const otherDom = nonOverdue.filter(t => !DOMAINS.includes(t.domain));
+      if (otherDom.length) {
+        html += `<div class="section">
+          <div class="section-head">
+            <span class="section-title">其他</span>
+            <span class="section-count">${otherDom.length}</span>
+          </div>
+          <div class="section-body">${otherDom.map(t => taskCard(t)).join('')}</div>
+        </div>`;
+      }
     }
   }
 
