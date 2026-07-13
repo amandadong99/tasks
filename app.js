@@ -8,7 +8,7 @@
 'use strict';
 
 /* === 版本号(与 service-worker.js 的 CACHE_VERSION 保持一致)=== */
-const APP_VERSION = 'v5.4';
+const APP_VERSION = 'v5.5';
 
 /* ---------------------------------------------------------------------
  * 0. 工具函数
