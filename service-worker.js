@@ -2,7 +2,7 @@
  * Service Worker - 离线缓存 + Push 推送接收
  * ===================================================================== */
 
-const CACHE_VERSION = 'amanda-tasks-v5.2-all-tasks-card';
+const CACHE_VERSION = 'amanda-tasks-v5.4-pin-swipe-followup';
 const CORE_FILES = [
   './',
   './index.html',

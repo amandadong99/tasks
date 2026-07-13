@@ -129,6 +129,60 @@ button { font-family: inherit; }
   margin-bottom: 8px;
 }
 .bar-red { background: var(--c-red); }
+.bar-gold { background: #F0B72E; }
+.section-pinned {
+  background: #FFF9EC;
+  padding: 10px 12px; border-radius: 12px; margin-bottom: 12px;
+  border: 1px solid #F0B72E33;
+}
+
+/* ---- 人物卡拖动 & 跟进频率徽章 ---- */
+.person-card.is-dragging {
+  opacity: 0.9;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.18);
+  z-index: 20; position: relative;
+  transition: none !important;
+}
+body.reordering { user-select: none; -webkit-user-select: none; }
+body.reordering .person-card { transition: transform .18s ease; }
+.person-followup-badge {
+  display: inline-block;
+  margin-top: 4px;
+  font-size: 11px; font-weight: 600;
+  padding: 2px 8px; border-radius: 8px;
+}
+.person-followup-badge.ok { background: #E9F5EA; color: #2F7A34; }
+.person-followup-badge.overdue { background: #FDECEC; color: #C2321F; }
+
+/* ---- 任务卡左右滑动 ---- */
+.swipe-wrap {
+  position: relative;
+  overflow: hidden;
+  border-radius: 12px;
+  margin-bottom: 6px;
+}
+.swipe-wrap .task-card { position: relative; z-index: 2; touch-action: pan-y; }
+.swipe-bg-right {
+  position: absolute; inset: 0;
+  background: linear-gradient(90deg, #E8F1FF 0%, #C9DEFF 100%);
+  color: #2454A8;
+  display: flex; align-items: center;
+  padding-left: 18px; font-weight: 600; font-size: 14px;
+  opacity: 0; transition: opacity .15s;
+  z-index: 1;
+}
+.swipe-wrap.swipe-right-preview .swipe-bg-right { opacity: 1; }
+.swipe-actions {
+  position: absolute; top: 0; right: 0; bottom: 0;
+  display: flex; align-items: stretch;
+  z-index: 1;
+}
+.swipe-btn {
+  border: none; padding: 0 18px; font-size: 14px; font-weight: 600;
+  color: #fff; cursor: pointer;
+}
+.swipe-btn.pin { background: #F0B72E; color: #3A2A00; }
+.swipe-btn.del { background: #D9463A; }
 .section-head {
   display: flex; align-items: center; justify-content: space-between;
   margin-bottom: 6px; padding: 0 2px;

@@ -8,7 +8,7 @@
 'use strict';
 
 /* === 版本号(与 service-worker.js 的 CACHE_VERSION 保持一致)=== */
-const APP_VERSION = 'v5.2';
+const APP_VERSION = 'v5.4';
 
 /* ---------------------------------------------------------------------
  * 0. 工具函数
@@ -853,8 +853,24 @@ function renderToday() {
     }
   }
 
-  // FILTER: default(超期红色置顶 + 今日领域分组)
+  // FILTER: default(置顶 + 超期红色 + 今日领域分组)
   else {
+    // 置顶区 —— 用户手动 pin 的重点/长期任务,始终首屏
+    const pinnedTasks = State.tasks.filter(t => t.pinned && t.status !== '已完成');
+    if (pinnedTasks.length) {
+      html += `<div class="section section-pinned">
+        <div class="section-bar bar-gold"></div>
+        <div class="section-head">
+          <span class="section-title">📌 置顶</span>
+          <span class="section-count">${pinnedTasks.length}</span>
+        </div>
+        <div class="section-body">
+          ${pinnedTasks
+            .sort((a,b)=> (a.dueDate||'zzz').localeCompare(b.dueDate||'zzz'))
+            .map(t => taskCard(t)).join('')}
+        </div>
+      </div>`;
+    }
     // 超期区(红色置顶,永不消失)
     if (overdue.length) {
       html += `<div class="section section-overdue">
@@ -875,13 +891,14 @@ function renderToday() {
       if (!items.length) continue;
       html += renderDomainSection(d, items);
     }
-    if (!overdue.length && !todayTasks.length) {
+    const pinnedCount = State.tasks.filter(t => t.pinned && t.status !== '已完成').length;
+    if (!pinnedCount && !overdue.length && !todayTasks.length) {
       html = renderEmpty('☀', '今天没有待办', '点击右下角 + 新建任务');
     }
   }
 
   root.innerHTML = html;
-  bindTaskCardEvents(root);
+  bindTaskCardEvents(root, { swipe: true });
   updateBadges();
 }
 
@@ -967,11 +984,15 @@ function renderPeople() {
     filtered = cards.filter(c => c.person.type === filter);
   }
 
-  // 只展示**至少有 1 个任务**关联的人物(无任务的人物从这个页面消失)
-  filtered = filtered.filter(c => c.allTasks.length > 0);
+  // 只展示**至少有 1 个任务** 或 **设置了跟进频率** 的人物
+  filtered = filtered.filter(c => c.allTasks.length > 0 || c.person.followupIntervalDays > 0);
 
-  // 排序:重要客户 → 久没动
+  // 排序:优先用手动 sortOrder,未设置则退回"重要客户 → 久没动"
   filtered.sort((a, b) => {
+    const ao = a.person.sortOrder, bo = b.person.sortOrder;
+    if (ao != null && bo != null) return ao - bo;
+    if (ao != null) return -1;
+    if (bo != null) return 1;
     const ia = a.person.importance === '重要客户' ? 1 : 0;
     const ib = b.person.importance === '重要客户' ? 1 : 0;
     if (ia !== ib) return ib - ia;
@@ -998,6 +1019,9 @@ function renderPeople() {
       if (pid) openPersonModal(pid);
     };
   });
+
+  // 长按拖动排序 —— 长按 400ms 进入拖动
+  bindPersonReorder(root);
 
   // 给每个人物卡的"+ 下次跟进"按钮绑事件
   $$('[data-act="next-followup"]', root).forEach(b => {
@@ -1048,6 +1072,17 @@ function openPersonModal(pid) {
         <label class="flex1">国家/地区 <input id="pe-country" value="${escapeHtml(p.country||'')}"></label>
       </div>
       <label>备注 <input id="pe-note" value="${escapeHtml(p.note||'')}"></label>
+      <label>定期跟进
+        <select id="pe-followup">
+          <option value="0" ${!p.followupIntervalDays?'selected':''}>不跟进</option>
+          <option value="3"  ${p.followupIntervalDays===3?'selected':''}>每 3 天</option>
+          <option value="7"  ${p.followupIntervalDays===7?'selected':''}>每周</option>
+          <option value="14" ${p.followupIntervalDays===14?'selected':''}>每 2 周</option>
+          <option value="30" ${p.followupIntervalDays===30?'selected':''}>每月</option>
+          <option value="60" ${p.followupIntervalDays===60?'selected':''}>每 2 个月</option>
+          <option value="90" ${p.followupIntervalDays===90?'selected':''}>每季度</option>
+        </select>
+      </label>
       <div class="muted small">当前关联 ${usedBy.length} 个任务</div>
     `,
     actions: [
@@ -1075,6 +1110,7 @@ function openPersonModal(pid) {
         p.company = $('#pe-company').value.trim();
         p.country = $('#pe-country').value.trim();
         p.note = $('#pe-note').value.trim();
+        p.followupIntervalDays = parseInt($('#pe-followup').value, 10) || 0;
         persistPersons();
         closeModal();
         renderAll();
@@ -1091,6 +1127,17 @@ function personCard({ person, tasks, daysSince }) {
     (a.dueDate || 'zzz').localeCompare(b.dueDate || 'zzz')));
   const lastSeen = daysSince < 9999 ? `${daysSince} 天前推进过` : '无推进记录';
 
+  // 跟进频率:如果设置了周期且已超期,亮红色 "该跟进" 徽章
+  let followupBadge = '';
+  if (person.followupIntervalDays > 0) {
+    const overdue = daysSince - person.followupIntervalDays;
+    if (overdue >= 0) {
+      followupBadge = `<span class="person-followup-badge overdue">该跟进 · 超 ${overdue} 天</span>`;
+    } else {
+      followupBadge = `<span class="person-followup-badge ok">每 ${person.followupIntervalDays} 天跟进 · 还剩 ${-overdue} 天</span>`;
+    }
+  }
+
   return `<div class="person-card" data-pid="${person.id}">
     <div class="person-head">
       <div class="person-avatar">${escapeHtml(person.name.slice(0,1))}</div>
@@ -1098,6 +1145,7 @@ function personCard({ person, tasks, daysSince }) {
         <div class="person-name">${escapeHtml(person.name)}${person.company ? ` <span class="muted small">(${escapeHtml(person.company)})</span>` : ''}</div>
         <div class="person-tag muted small">${escapeHtml(tagText) || person.type || ''}</div>
         <div class="person-tag muted small">${lastSeen}</div>
+        ${followupBadge}
       </div>
       <div class="person-badge">${tasks.length} 项 ›</div>
     </div>
@@ -1108,6 +1156,78 @@ function personCard({ person, tasks, daysSince }) {
       + 设置下次跟进
     </button>
   </div>`;
+}
+
+/* ---- 人物卡:长按拖动排序 ---- */
+let _personDrag = null;
+function bindPersonReorder(root) {
+  $$('.person-card', root).forEach(card => {
+    let holdTimer = null, sx = 0, sy = 0;
+    card.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      if (e.target.closest('button, input, textarea, select, a')) return;
+      sx = e.clientX; sy = e.clientY;
+      holdTimer = setTimeout(() => { holdTimer = null; _startPersonDrag(card, e); }, 400);
+    });
+    card.addEventListener('pointermove', (e) => {
+      if (holdTimer && (Math.abs(e.clientY - sy) > 8 || Math.abs(e.clientX - sx) > 8)) {
+        clearTimeout(holdTimer); holdTimer = null;
+      }
+      if (_personDrag && _personDrag.card === card) _onPersonDrag(e);
+    });
+    const stop = (e) => {
+      if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
+      if (_personDrag && _personDrag.card === card) _endPersonDrag();
+    };
+    card.addEventListener('pointerup', stop);
+    card.addEventListener('pointercancel', stop);
+  });
+}
+function _startPersonDrag(card, e) {
+  try { card.setPointerCapture(e.pointerId); } catch {}
+  card.classList.add('is-dragging');
+  document.body.classList.add('reordering');
+  if (navigator.vibrate) { try { navigator.vibrate(25); } catch {} }
+  _personDrag = { card, pointerId: e.pointerId, refY: e.clientY };
+}
+function _onPersonDrag(e) {
+  const s = _personDrag;
+  const dy = e.clientY - s.refY;
+  s.card.style.transform = `translateY(${dy}px)`;
+  const parent = s.card.parentElement;
+  const siblings = Array.from(parent.querySelectorAll('.person-card')).filter(c => c !== s.card);
+  for (const sib of siblings) {
+    const r = sib.getBoundingClientRect();
+    const mid = r.top + r.height / 2;
+    const rel = s.card.compareDocumentPosition(sib);
+    if (e.clientY < mid && (rel & Node.DOCUMENT_POSITION_PRECEDING)) {
+      parent.insertBefore(s.card, sib);
+      s.card.style.transform = '';
+      s.refY = e.clientY;
+      return;
+    }
+    if (e.clientY > mid && (rel & Node.DOCUMENT_POSITION_FOLLOWING)) {
+      parent.insertBefore(s.card, sib.nextSibling);
+      s.card.style.transform = '';
+      s.refY = e.clientY;
+      return;
+    }
+  }
+}
+function _endPersonDrag() {
+  const s = _personDrag; _personDrag = null;
+  try { s.card.releasePointerCapture(s.pointerId); } catch {}
+  s.card.classList.remove('is-dragging');
+  s.card.style.transform = '';
+  document.body.classList.remove('reordering');
+  const parent = s.card.parentElement;
+  Array.from(parent.querySelectorAll('.person-card')).forEach((c, i) => {
+    const pid = c.dataset.pid;
+    const p = State.persons.find(x => x.id === pid);
+    if (p) p.sortOrder = (i + 1) * 1000;
+  });
+  persistPersons();
+  toast('顺序已保存');
 }
 
 /* ---------------------------------------------------------------------
@@ -1970,7 +2090,13 @@ function taskCard(t, opt = {}) {
   const overdue = opt.overdue === true;
   const overdueDays = overdue ? getOverdueDays(t) : 0;
   const personLabels = (t.relatedPerson || []).map(getPersonName).slice(0, 3).join(', ');
-  const typeBadge = t.type && t.type !== '单点' ? `<span class="task-type">${escapeHtml(t.type)}</span>` : '';
+  // 出差/展会子任务:徽章上带上父行程名,便于区分「哪次出差」
+  let typeBadgeText = t.type;
+  if (t.type === '出差子任务' && t.linkedTripId) {
+    const parentTrip = State.trips && State.trips.find(x => x.id === t.linkedTripId);
+    if (parentTrip && parentTrip.name) typeBadgeText = `${parentTrip.name} · 子任务`;
+  }
+  const typeBadge = t.type && t.type !== '单点' ? `<span class="task-type">${escapeHtml(typeBadgeText)}</span>` : '';
   const priBadge = t.priority === 'P0' ? '<span class="pri pri-p0">P0</span>' :
                    t.priority === 'P1' ? '' : '<span class="pri pri-p2">P2</span>';
   const titleShown = t._decoratedTitle || t.title;
@@ -2002,7 +2128,7 @@ function taskCard(t, opt = {}) {
   </div>`;
 }
 
-function bindTaskCardEvents(root) {
+function bindTaskCardEvents(root, opt = {}) {
   $$('.task-card', root).forEach(card => {
     const tid = card.dataset.tid;
     if (!tid) return;
@@ -2018,8 +2144,113 @@ function bindTaskCardEvents(root) {
       e.stopPropagation();
       markRhythmDone(tid);
     });
-    card.addEventListener('click', () => openTaskDetail(tid));
+    card.addEventListener('click', () => {
+      if (card._suppressClick) return;
+      openTaskDetail(tid);
+    });
   });
+  // 今日视图额外启用 左划(置顶/删除) + 右划(延到明天)
+  if (opt.swipe) wrapCardsForSwipe(root);
+}
+
+/* ---- 任务卡:左划抽屉(置顶/删除) + 右划(延到明天) ---- */
+function wrapCardsForSwipe(root) {
+  $$('.task-card', root).forEach(card => {
+    if (card.parentElement.classList.contains('swipe-wrap')) return;
+    const tid = card.dataset.tid;
+    if (!tid) return;
+    const t = State.tasks.find(x => x.id === tid);
+    if (!t) return;
+    const wrap = document.createElement('div');
+    wrap.className = 'swipe-wrap';
+    const pinLabel = t.pinned ? '取消置顶' : '置顶';
+    wrap.innerHTML = `
+      <div class="swipe-bg-right"><span>→ 延到明天</span></div>
+      <div class="swipe-actions">
+        <button type="button" class="swipe-btn pin" data-swipe-act="pin" data-tid="${tid}">${pinLabel}</button>
+        <button type="button" class="swipe-btn del" data-swipe-act="del" data-tid="${tid}">删除</button>
+      </div>`;
+    card.parentNode.insertBefore(wrap, card);
+    wrap.appendChild(card);
+    _bindSwipeCard(wrap, card, tid);
+  });
+  $$('[data-swipe-act]', root).forEach(b => {
+    b.onclick = (e) => {
+      e.stopPropagation();
+      const tid = b.dataset.tid;
+      if (b.dataset.swipeAct === 'pin') togglePinTask(tid);
+      else if (b.dataset.swipeAct === 'del') deleteTask(tid);
+    };
+  });
+}
+function _bindSwipeCard(wrap, card, tid) {
+  let sx = 0, sy = 0, dx = 0, active = false, decided = false, vertical = false;
+  let openState = 0;
+  const OPEN_X = -160;
+  card.addEventListener('pointerdown', (e) => {
+    if (e.target.closest('button, input, textarea, select, a')) return;
+    sx = e.clientX; sy = e.clientY; dx = 0;
+    active = true; decided = false; vertical = false;
+    card.style.transition = '';
+  });
+  card.addEventListener('pointermove', (e) => {
+    if (!active) return;
+    const cdx = e.clientX - sx;
+    const cdy = e.clientY - sy;
+    if (!decided) {
+      if (Math.abs(cdx) < 6 && Math.abs(cdy) < 6) return;
+      decided = true;
+      if (Math.abs(cdy) > Math.abs(cdx)) { vertical = true; return; }
+      try { card.setPointerCapture(e.pointerId); } catch {}
+    }
+    if (vertical) return;
+    dx = cdx + (openState === 1 ? OPEN_X : 0);
+    if (dx > 220) dx = 220;
+    if (dx < -220) dx = -220;
+    card.style.transform = `translateX(${dx}px)`;
+    wrap.classList.toggle('swipe-right-preview', dx > 40);
+    wrap.classList.toggle('swipe-left-preview', dx < -40);
+  });
+  const finish = () => {
+    if (!active) return;
+    active = false;
+    if (vertical) return;
+    card.style.transition = 'transform .18s ease';
+    if (dx <= -60) {
+      card.style.transform = `translateX(${OPEN_X}px)`;
+      openState = 1;
+    } else if (dx >= 80) {
+      card.style.transform = 'translateX(120vw)';
+      setTimeout(() => postponeTask(tid, addDays(todayISO(), 1)), 180);
+    } else {
+      card.style.transform = 'translateX(0)';
+      openState = 0;
+    }
+    wrap.classList.remove('swipe-right-preview', 'swipe-left-preview');
+    if (Math.abs(dx) > 6) {
+      card._suppressClick = true;
+      setTimeout(() => { card._suppressClick = false; }, 300);
+    }
+  };
+  card.addEventListener('pointerup', finish);
+  card.addEventListener('pointercancel', () => { active = false; });
+  // 抽屉打开状态下,点空白 → 关闭
+  card.addEventListener('click', (e) => {
+    if (openState === 1 && !e.target.closest('.swipe-btn')) {
+      openState = 0;
+      card.style.transition = 'transform .18s ease';
+      card.style.transform = 'translateX(0)';
+      e.stopPropagation();
+    }
+  }, true);
+}
+function togglePinTask(tid) {
+  const t = State.tasks.find(x => x.id === tid);
+  if (!t) return;
+  t.pinned = !t.pinned;
+  persistTasks();
+  renderAll();
+  toast(t.pinned ? '已置顶 📌' : '已取消置顶');
 }
 
 /* ---------------------------------------------------------------------
