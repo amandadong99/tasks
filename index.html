@@ -35,38 +35,23 @@
     <div id="today-content"></div>
   </section>
 
-  <!-- 2. 本周 -->
-  <section class="view" data-view="week" hidden>
-    <div id="week-content"></div>
+  <!-- 2. 客户 -->
+  <section class="view" data-view="customer" hidden>
+    <div id="customer-content"></div>
   </section>
 
-  <!-- 3. 人 -->
-  <section class="view" data-view="people" hidden>
-    <div class="filter-bar" id="people-filter">
-      <button class="chip active" data-filter="all">全部</button>
-      <button class="chip" data-filter="客户">客户</button>
-      <button class="chip" data-filter="团队">团队</button>
-      <button class="chip" data-filter="行业">行业</button>
-      <button class="chip" data-filter="个人">个人</button>
-    </div>
-    <div id="people-content"></div>
+  <!-- 3. 团队 -->
+  <section class="view" data-view="team" hidden>
+    <div id="team-content"></div>
   </section>
 
-  <!-- 4. 节奏 -->
+  <!-- 4. 节奏 (长期) -->
   <section class="view" data-view="rhythm" hidden>
     <div class="filter-bar" id="rhythm-filter">
       <button class="chip active" data-rhythm="frequency">频率型</button>
       <button class="chip" data-rhythm="date">日期型</button>
     </div>
     <div id="rhythm-content"></div>
-  </section>
-
-  <!-- 6. 笔记 -->
-  <section class="view" data-view="notes" hidden>
-    <div class="filter-bar" id="notes-filter">
-      <button class="chip active" data-notes-cat="all">全部</button>
-    </div>
-    <div id="notes-content"></div>
   </section>
 
   <!-- 5. 出差 -->
@@ -76,6 +61,19 @@
       <p class="muted">每次出差是一个临时项目</p>
     </div>
     <div id="trip-content"></div>
+  </section>
+
+  <!-- 6. 展会 -->
+  <section class="view" data-view="exhibition" hidden>
+    <div id="exhibition-content"></div>
+  </section>
+
+  <!-- 7. 笔记 -->
+  <section class="view" data-view="notes" hidden>
+    <div class="filter-bar" id="notes-filter">
+      <button class="chip active" data-notes-cat="all">全部</button>
+    </div>
+    <div id="notes-content"></div>
   </section>
 
 </main>
@@ -89,17 +87,20 @@
     <span class="tab-icon">●</span><span class="tab-label">今日</span>
     <span class="tab-badge" id="badge-today" hidden></span>
   </button>
-  <button class="tab" data-tab="week">
-    <span class="tab-icon">▤</span><span class="tab-label">本周</span>
+  <button class="tab" data-tab="customer">
+    <span class="tab-icon">◉</span><span class="tab-label">客户</span>
+  </button>
+  <button class="tab" data-tab="team">
+    <span class="tab-icon">◍</span><span class="tab-label">团队</span>
   </button>
   <button class="tab" data-tab="rhythm">
     <span class="tab-icon">↻</span><span class="tab-label">长期</span>
   </button>
-  <button class="tab" data-tab="people">
-    <span class="tab-icon">◉</span><span class="tab-label">人物</span>
-  </button>
   <button class="tab" data-tab="trip">
     <span class="tab-icon">✈</span><span class="tab-label">出差</span>
+  </button>
+  <button class="tab" data-tab="exhibition">
+    <span class="tab-icon">🎪</span><span class="tab-label">展会</span>
   </button>
   <button class="tab" data-tab="notes">
     <span class="tab-icon">📝</span><span class="tab-label">笔记</span>

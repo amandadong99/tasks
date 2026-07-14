@@ -84,18 +84,21 @@ button { font-family: inherit; }
 
 /* ---- 顶部 4 数字卡(可点击切换过滤)---- */
 .stats-row {
-  display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;
+  display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px;
   margin-bottom: 14px;
 }
+.stat.stat-week.on { background: #E8F1FF; border-color: #2454A8; }
+.stat.stat-week.on .stat-num { color: #2454A8; }
 .stat {
   background: var(--c-card); border: 0.5px solid var(--c-border);
-  border-radius: 12px; padding: 10px 8px; text-align: center;
+  border-radius: 10px; padding: 8px 4px; text-align: center;
   cursor: pointer; font-family: inherit;
   transition: transform .12s, border-color .15s;
+  min-width: 0;
 }
 .stat:active { transform: scale(0.96); }
-.stat-num { font-size: 26px; font-weight: 600; line-height: 1.15; }
-.stat-label { font-size: 13px; color: var(--c-text-muted); margin-top: 2px; }
+.stat-num { font-size: 22px; font-weight: 600; line-height: 1.15; }
+.stat-label { font-size: 12px; color: var(--c-text-muted); margin-top: 2px; }
 .stat.on.stat-overdue { background: var(--c-red-soft); border-color: var(--c-red); }
 .stat.on.stat-overdue .stat-num { color: var(--c-red); }
 .stat.on.stat-tomorrow { background: var(--c-amber-soft); border-color: var(--c-amber); }
@@ -544,14 +547,14 @@ body.reordering .person-card { transition: transform .18s ease; }
 .tab {
   flex: 1; display: flex; flex-direction: column; align-items: center;
   justify-content: center; gap: 2px;
-  padding: 8px 2px 6px; min-height: 56px;
+  padding: 6px 1px 5px; min-height: 54px; min-width: 0;
   background: transparent; border: none; cursor: pointer;
   color: var(--c-text-muted); position: relative;
   font-family: inherit;
 }
 .tab.active { color: var(--c-primary-deep); }
-.tab-icon { font-size: 22px; line-height: 1; }
-.tab-label { font-size: 12px; }
+.tab-icon { font-size: 20px; line-height: 1; }
+.tab-label { font-size: 11px; white-space: nowrap; }
 .tab-badge {
   position: absolute; top: 6px; right: 22%;
   background: var(--c-red); color: #fff;
@@ -1180,6 +1183,73 @@ body.reordering .person-card { transition: transform .18s ease; }
 .btn-icon:hover { background: rgba(0,0,0,0.05); }
 .btn-icon.danger { color: var(--c-red); }
 .btn-icon.danger:hover { background: var(--c-red-soft); }
+
+/* ---- 展会视图 ---- */
+.ex-toolbar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.ex-filter-row {
+  display: flex; gap: 8px; margin-bottom: 12px;
+  align-items: center; flex-wrap: wrap;
+}
+.ex-filter-label {
+  font-size: 13px; color: var(--c-text-muted); font-weight: 500;
+}
+.ex-select {
+  padding: 8px 10px; border-radius: 8px;
+  border: 0.5px solid var(--c-border);
+  background: var(--c-card); font-size: 14px;
+  font-family: inherit;
+}
+.ex-month-group {
+  margin-bottom: 16px;
+}
+.ex-month-head {
+  font-size: 15px; font-weight: 600; color: var(--c-primary-deep);
+  padding: 6px 4px; margin-bottom: 8px;
+  border-bottom: 2px solid var(--c-primary-soft);
+}
+.ex-card {
+  background: var(--c-card); border: 0.5px solid var(--c-border);
+  border-radius: 10px; padding: 12px 14px; margin-bottom: 8px;
+  cursor: pointer; transition: transform .12s;
+}
+.ex-card:active { transform: scale(0.99); }
+.ex-card-head {
+  display: flex; align-items: center; gap: 8px;
+  flex-wrap: wrap; margin-bottom: 6px;
+}
+.ex-country-flag {
+  background: var(--c-primary-soft);
+  color: var(--c-primary-deep);
+  font-weight: 700; font-size: 13px;
+  padding: 3px 10px; border-radius: 8px;
+  flex-shrink: 0;
+}
+.ex-card-title {
+  flex: 1; font-size: 16px; font-weight: 600;
+  min-width: 0; word-break: break-word;
+}
+.ex-badge {
+  font-size: 12px; font-weight: 600;
+  padding: 3px 9px; border-radius: 8px;
+  flex-shrink: 0;
+}
+.ex-badge.ongoing { background: var(--c-green-soft); color: var(--c-green-deep); }
+.ex-badge.soon { background: var(--c-red-soft); color: var(--c-red-deep); }
+.ex-badge.future { background: #F1EFE8; color: var(--c-text-muted); }
+.ex-card-meta {
+  display: flex; flex-wrap: wrap; gap: 8px 12px;
+}
+.ex-agent-tag {
+  background: #FEF3C7; color: #78350F;
+  padding: 1px 8px; border-radius: 6px; font-weight: 500;
+}
+.ex-card-notes {
+  margin-top: 6px; padding-top: 6px;
+  border-top: 0.5px dashed var(--c-divider);
+}
 
 /* 出差列表卡片 - 折叠/展开 */
 .trip-card-head {

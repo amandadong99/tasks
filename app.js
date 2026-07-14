@@ -8,7 +8,7 @@
 'use strict';
 
 /* === 版本号(与 service-worker.js 的 CACHE_VERSION 保持一致)=== */
-const APP_VERSION = 'v5.6';
+const APP_VERSION = 'v5.7';
 
 /* ---------------------------------------------------------------------
  * 0. 工具函数
@@ -59,6 +59,7 @@ const KEY = {
   trips: 'amanda.trips',
   templates: 'amanda.tripTemplates',
   fuzzyPlans: 'amanda.fuzzyPlans',
+  exhibitions: 'amanda.exhibitions',
   notes: 'amanda.notes',
   meta: 'amanda.meta',
   docKey: 'amanda.docKey',
@@ -383,12 +384,14 @@ const State = {
   trips: [],
   templates: [],
   fuzzyPlans: [],   // 客户模糊来访计划 { id, text, createdAt }
+  exhibitions: [],  // 展会 { id, name, dateStart, dateEnd, country, city, frequency, agent, url, notes }
   notes: [],
   ui: { tab: 'today', peopleFilter: 'all', rhythmTab: 'frequency',
         notesFilter: 'all', tripView: 'calendar',
         tripCalYear: null, tripCalMonth: null,   // 当前显示的月份
         tripCardCollapsed: {},                    // trip.id -> bool 折叠状态
-        todayFilter: 'default' },                 // default / overdue / today / tomorrow / done
+        todayFilter: 'default',                   // default / overdue / today / week / tomorrow / all
+        exFilter: { month: 'all', country: 'all' } },  // 展会筛选
 };
 
 function initData() {
@@ -411,7 +414,19 @@ function initData() {
     State.templates = Store.load(KEY.templates, seedTemplates());
     State.trips = Store.load(KEY.trips, []);
     State.fuzzyPlans = Store.load(KEY.fuzzyPlans, []);
+    State.exhibitions = Store.load(KEY.exhibitions, []);
     State.notes = Store.load(KEY.notes, []);
+
+    // v5.7 迁移:行业→客户 · 个人→团队(用户不再需要这两类)
+    let migrated = 0;
+    for (const p of State.persons) {
+      if (p.type === '行业') { p.type = '客户'; migrated++; }
+      else if (p.type === '个人') { p.type = '团队'; migrated++; }
+    }
+    if (migrated) {
+      Store.save(KEY.persons, State.persons);
+      console.info(`[Migrate v5.7] 迁移 ${migrated} 个人物:行业→客户 / 个人→团队`);
+    }
   }
   // 自动生成日期型任务的当日实例
   generateDateBasedInstances();
@@ -495,10 +510,10 @@ function migrateTripTemplates() {
 }
 
 /* 持久化 + Firebase 同步 */
-const _syncSnapshot = { tasks: null, persons: null, trips: null, templates: null, notes: null, fuzzyPlans: null };
+const _syncSnapshot = { tasks: null, persons: null, trips: null, templates: null, notes: null, fuzzyPlans: null, exhibitions: null };
 
 function captureSyncSnapshot() {
-  for (const k of ['tasks', 'persons', 'trips', 'templates', 'notes', 'fuzzyPlans']) {
+  for (const k of ['tasks', 'persons', 'trips', 'templates', 'notes', 'fuzzyPlans', 'exhibitions']) {
     _syncSnapshot[k] = JSON.stringify(State[k]);
   }
 }
@@ -535,6 +550,7 @@ function persistTrips() { Store.save(KEY.trips, State.trips); _syncToFirebase('t
 function persistTemplates() { Store.save(KEY.templates, State.templates); _syncToFirebase('templates'); }
 function persistNotes() { Store.save(KEY.notes, State.notes); _syncToFirebase('notes'); }
 function persistFuzzyPlans() { Store.save(KEY.fuzzyPlans, State.fuzzyPlans); _syncToFirebase('fuzzyPlans'); }
+function persistExhibitions() { Store.save(KEY.exhibitions, State.exhibitions); _syncToFirebase('exhibitions'); }
 
 /* ---------------------------------------------------------------------
  * 4. 业务逻辑工具
@@ -711,7 +727,7 @@ function renderToday() {
   const filter = State.ui.todayFilter || 'default';
   const tomorrowDate = addDays(todayISO(), 1);
 
-  // 4 类计数
+  // 5 类计数
   const overdue = State.tasks.filter(isOverdue);
   const todayTasks = State.tasks.filter(t =>
     !isOverdue(t) && (
@@ -723,6 +739,13 @@ function renderToday() {
   const tomorrowTasks = State.tasks.filter(t =>
     t.dueDate === tomorrowDate && t.status !== '已完成'
   );
+  // 本周(今~周日;不含超期)
+  const _eow = endOfThisWeekISO();
+  const _today = todayISO();
+  const weekTasks = State.tasks.filter(t =>
+    t.status !== '已完成' &&
+    t.dueDate && t.dueDate >= _today && t.dueDate <= _eow
+  );
   // 所有未完成的待办(不含节奏型,那些在长期 Tab 有专属展示)
   const allOpen = State.tasks.filter(t =>
     t.status !== '已完成' &&
@@ -730,7 +753,7 @@ function renderToday() {
     t.type !== '节奏-日期型'
   );
 
-  // 顶部 4 个可点击数字卡
+  // 顶部 5 个可点击数字卡
   stats.innerHTML = `
     <button class="stat stat-overdue ${overdue.length ? 'on' : ''} ${filter==='overdue'?'active':''}" data-stat-filter="overdue">
       <div class="stat-num">${overdue.length}</div><div class="stat-label">超期</div>
@@ -740,6 +763,9 @@ function renderToday() {
     </button>
     <button class="stat stat-tomorrow ${tomorrowTasks.length ? 'on' : ''} ${filter==='tomorrow'?'active':''}" data-stat-filter="tomorrow">
       <div class="stat-num">${tomorrowTasks.length}</div><div class="stat-label">明天</div>
+    </button>
+    <button class="stat stat-week ${filter==='week'?'active':''}" data-stat-filter="week">
+      <div class="stat-num">${weekTasks.length}</div><div class="stat-label">本周</div>
     </button>
     <button class="stat stat-all ${filter==='all'?'active':''}" data-stat-filter="all">
       <div class="stat-num">${allOpen.length}</div><div class="stat-label">所有</div>
@@ -806,6 +832,35 @@ function renderToday() {
         html += `<div class="section"><div class="section-body">
           ${otherTomorrow.map(t => taskCard(t)).join('')}
         </div></div>`;
+      }
+    }
+  }
+
+  // FILTER: week(本周内待办,按日期分组显示)
+  else if (filter === 'week') {
+    if (!weekTasks.length) {
+      html = renderEmpty('📅', '本周暂无剩余任务', '继续保持');
+    } else {
+      // 按日期分组
+      const byDate = {};
+      for (const t of weekTasks) (byDate[t.dueDate] ||= []).push(t);
+      const dates = Object.keys(byDate).sort();
+      const wdNames = ['日','一','二','三','四','五','六'];
+      for (const d of dates) {
+        const items = sortByTime(byDate[d]);
+        const dt = parseLocalDate(d);
+        const label = d === _today ? '今天' :
+                      d === tomorrowDate ? '明天' :
+                      `${dt.getMonth()+1}/${dt.getDate()} 周${wdNames[dt.getDay()]}`;
+        html += `<div class="section">
+          <div class="section-head">
+            <span class="section-title">${label}</span>
+            <span class="section-count">${items.length}</span>
+          </div>
+          <div class="section-body">
+            ${items.map(t => taskCard(t)).join('')}
+          </div>
+        </div>`;
       }
     }
   }
@@ -966,14 +1021,18 @@ function renderWeek() {
 }
 
 /* ---------------------------------------------------------------------
- * 7. 视图:按人
+ * 7. 视图:客户 / 团队(原"人物"拆成两个 Tab)
  * ------------------------------------------------------------------ */
-function renderPeople() {
-  const root = $('#people-content');
-  const filter = State.ui.peopleFilter;
+function renderCustomerView() { renderPersonsScope('customer'); }
+function renderTeamView() { renderPersonsScope('team'); }
 
-  // 给每个人聚合任务(任何 status 都算,这样过期已完成历史也能体现节奏)
-  const cards = State.persons.map(p => {
+function renderPersonsScope(scope) {
+  const rootId = scope === 'customer' ? '#customer-content' : '#team-content';
+  const root = $(rootId);
+  const targetType = scope === 'customer' ? '客户' : '团队';
+
+  // 给每个人聚合任务
+  const cards = State.persons.filter(p => p.type === targetType).map(p => {
     const allTasks = State.tasks.filter(t => t.relatedPerson?.includes(p.id));
     const openTasks = allTasks.filter(t => t.status !== '已完成');
     const lastProgress = allTasks
@@ -983,14 +1042,8 @@ function renderPeople() {
     return { person: p, tasks: openTasks, allTasks, daysSince };
   });
 
-  // 类型过滤(全部 / 客户 / 团队 / 行业 / 个人)
-  let filtered = cards;
-  if (filter && filter !== 'all') {
-    filtered = cards.filter(c => c.person.type === filter);
-  }
-
   // 只展示**至少有 1 个任务** 或 **设置了跟进频率** 的人物
-  filtered = filtered.filter(c => c.allTasks.length > 0 || c.person.followupIntervalDays > 0);
+  let filtered = cards.filter(c => c.allTasks.length > 0 || c.person.followupIntervalDays > 0);
 
   // 排序:优先用手动 sortOrder,未设置则退回"重要客户 → 久没动"
   filtered.sort((a, b) => {
@@ -1008,16 +1061,16 @@ function renderPeople() {
 
   if (!html) {
     html = `<div class="empty">
-      <div class="empty-emoji">◉</div>
-      <div class="empty-title">${filter==='all'?'还没有关联人物的任务':`暂无类型为"${filter}"的人物`}</div>
-      <div class="empty-sub">在新建任务时勾选关联人,该人物会出现在这里</div>
+      <div class="empty-emoji">${scope==='customer'?'◉':'◍'}</div>
+      <div class="empty-title">暂无${targetType}</div>
+      <div class="empty-sub">新建任务时勾选关联人,该${targetType}会出现在这里</div>
     </div>`;
   }
 
   root.innerHTML = html;
   bindTaskCardEvents(root);
 
-  // 点人物卡头部 → 打开人物管理弹窗(编辑/删除)
+  // 点人物卡头部 → 编辑/删除
   $$('.person-head', root).forEach(el => {
     el.onclick = () => {
       const pid = el.closest('.person-card')?.dataset.pid;
@@ -1025,20 +1078,18 @@ function renderPeople() {
     };
   });
 
-  // 长按拖动排序 —— 长按 400ms 进入拖动
+  // 长按拖动排序
   bindPersonReorder(root);
 
-  // 给每个人物卡的"+ 下次跟进"按钮绑事件
+  // "+ 设置下次跟进"
   $$('[data-act="next-followup"]', root).forEach(b => {
     b.onclick = (e) => {
       e.stopPropagation();
       const pid = b.dataset.pid;
       const p = State.persons.find(x => x.id === pid);
-      // 直接打开新建任务弹窗,预填关联人 + 默认领域
       openTaskModal(null, {
         title: `跟进 ${p?.name || ''}`,
-        domain: p?.type === '团队' ? '内部与系统' :
-                p?.type === '个人' ? '家庭与个人' : '客户与销售',
+        domain: p?.type === '团队' ? '内部与系统' : '客户与销售',
         type: '长期跟进',
         relatedPerson: [pid],
         priority: 'P1',
@@ -1061,7 +1112,7 @@ function openPersonModal(pid) {
       <div class="row">
         <label class="flex1">类型
           <select id="pe-type">
-            ${['客户','团队','行业','个人'].map(x =>
+            ${['客户','团队'].map(x =>
               `<option ${p.type===x?'selected':''}>${x}</option>`).join('')}
           </select>
         </label>
@@ -1814,6 +1865,307 @@ function renderFuzzyPlans() {
     </div>
     <div class="fp-list">${itemsHtml}</div>
   </div>`;
+}
+
+/* ============================================================
+ * 展会 (Exhibition) — 数据模型 · 解析 · 视图
+ * ============================================================ */
+
+/** 中文国家名字典(按名称首字符出现顺序匹配) */
+const EX_COUNTRIES = [
+  '墨西哥','美国','韩国','沙特阿拉伯','沙特','波兰','泰国','孟加拉','土耳其',
+  '罗马尼亚','印尼','印度尼西亚','西班牙','阿尔及利亚','俄罗斯','埃及','越南',
+  '印度','马来西亚','阿联酋','迪拜','乌兹别克斯坦','德国','哈萨克斯坦','巴西',
+  '加拿大','哥伦比亚','意大利','法国','英国','日本','澳大利亚','南非','尼日利亚',
+  '肯尼亚','新加坡','菲律宾','土库曼斯坦','巴基斯坦','伊朗','摩洛哥','突尼斯',
+  '中国',
+];
+function extractExCountry(name) {
+  for (const c of EX_COUNTRIES) if (name.includes(c)) return c === '沙特' ? '沙特阿拉伯' : (c==='迪拜'?'阿联酋':(c==='印尼'?'印度尼西亚':c));
+  return '';
+}
+
+/** 解析日期字符串:2026.08.19-22 / 2026.8.27-30 / 2027.02.26-03.01 */
+function parseExDate(str) {
+  if (!str) return null;
+  str = str.replace(/\//g, '.').trim();
+  // A: YYYY.MM.DD-DD  (同月)
+  let m = str.match(/^(\d{4})[.\-](\d{1,2})[.\-](\d{1,2})-(\d{1,2})$/);
+  if (m) return { start: _pad(m[1],m[2],m[3]), end: _pad(m[1],m[2],m[4]) };
+  // B: YYYY.MM.DD-MM.DD  (跨月)
+  m = str.match(/^(\d{4})[.\-](\d{1,2})[.\-](\d{1,2})-(\d{1,2})[.\-](\d{1,2})$/);
+  if (m) return { start: _pad(m[1],m[2],m[3]), end: _pad(m[1],m[4],m[5]) };
+  // C: 单日 YYYY.MM.DD
+  m = str.match(/^(\d{4})[.\-](\d{1,2})[.\-](\d{1,2})$/);
+  if (m) return { start: _pad(m[1],m[2],m[3]), end: _pad(m[1],m[2],m[3]) };
+  return null;
+}
+function _pad(y, m, d) {
+  return `${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+}
+
+/** 解析用户粘贴的展会表格文本(每行 TAB 分隔;续行属上一条) */
+function parseExhibitionText(raw) {
+  const lines = raw.split('\n').map(l => l.replace(/\r/g,'')).filter(l => l.trim());
+  const rows = [];
+  let cur = null;
+  const dateRe = /^\s*\d{4}[.\/-]\d{1,2}/;
+  for (const line of lines) {
+    if (dateRe.test(line)) {
+      if (cur) rows.push(cur);
+      cur = line;
+    } else if (cur) {
+      cur += ' ' + line.trim();  // 续行拼到上一条
+    }
+  }
+  if (cur) rows.push(cur);
+
+  const out = [];
+  for (const r of rows) {
+    // 优先按 TAB 分列;若失败按连续空格
+    let parts = r.split('\t').map(x => x.trim());
+    if (parts.length < 3) parts = r.split(/\s{2,}/).map(x => x.trim());
+    const [dateStr, name, frequency, city] = parts;
+    if (!dateStr || !name) continue;
+    const d = parseExDate(dateStr);
+    if (!d) continue;
+    const cleanName = name.replace(/\s+中国区总代\s*/g, '').replace(/\s+/g, ' ').trim();
+    const agent = /中国区总代/.test(name);
+    out.push({
+      id: uuid(),
+      name: cleanName,
+      dateStart: d.start,
+      dateEnd: d.end,
+      country: extractExCountry(cleanName),
+      city: (city || '').trim(),
+      frequency: (frequency || '').trim(),
+      agent,
+      notes: '',
+      createdAt: new Date().toISOString(),
+    });
+  }
+  return out;
+}
+
+/** 展会视图入口 */
+function renderExhibitions() {
+  const root = $('#exhibition-content');
+  const filter = State.ui.exFilter || (State.ui.exFilter = { month: 'all', country: 'all' });
+
+  // 已过期(结束日 < 今天)不显示,让用户专注未来展会
+  const today = todayISO();
+  let list = (State.exhibitions || []).filter(e => (e.dateEnd || e.dateStart) >= today);
+
+  // 收集用于筛选的国家、月份
+  const countries = [...new Set(list.map(e => e.country).filter(Boolean))].sort();
+  const months = [...new Set(list.map(e => (e.dateStart||'').slice(0,7)).filter(Boolean))].sort();
+
+  // 应用筛选
+  let filtered = list.slice();
+  if (filter.month && filter.month !== 'all') {
+    filtered = filtered.filter(e => (e.dateStart||'').startsWith(filter.month));
+  }
+  if (filter.country && filter.country !== 'all') {
+    filtered = filtered.filter(e => e.country === filter.country);
+  }
+  filtered.sort((a,b) => (a.dateStart||'').localeCompare(b.dateStart||''));
+
+  let html = `<div class="ex-toolbar">
+    <button class="btn btn-primary btn-small" id="ex-add">+ 添加展会</button>
+    <button class="btn btn-ghost btn-small" id="ex-import">📥 导入表格</button>
+    <span class="muted small">共 ${list.length} 场未开始 / 全部 ${State.exhibitions.length} 场</span>
+  </div>`;
+
+  // 月份筛选条
+  html += `<div class="ex-filter-row">
+    <label class="ex-filter-label">月份</label>
+    <select id="ex-month-filter" class="ex-select">
+      <option value="all">全部</option>
+      ${months.map(mo => {
+        const [y,m] = mo.split('-');
+        return `<option value="${mo}" ${filter.month===mo?'selected':''}>${y} 年 ${parseInt(m)} 月</option>`;
+      }).join('')}
+    </select>
+    <label class="ex-filter-label">国家</label>
+    <select id="ex-country-filter" class="ex-select">
+      <option value="all">全部</option>
+      ${countries.map(c => `<option value="${escapeHtml(c)}" ${filter.country===c?'selected':''}>${escapeHtml(c)}</option>`).join('')}
+    </select>
+  </div>`;
+
+  if (!filtered.length) {
+    html += `<div class="empty">
+      <div class="empty-emoji">🎪</div>
+      <div class="empty-title">${State.exhibitions.length ? '当前筛选下没有展会' : '还没有展会数据'}</div>
+      <div class="empty-sub">${State.exhibitions.length ? '换个月份/国家试试' : '点「+ 添加」手动录入,或「📥 导入表格」粘贴展会计划表'}</div>
+    </div>`;
+  } else {
+    // 按月分组展示
+    const byMonth = {};
+    for (const e of filtered) {
+      const k = (e.dateStart||'').slice(0,7);
+      (byMonth[k] ||= []).push(e);
+    }
+    for (const k of Object.keys(byMonth).sort()) {
+      const [y,m] = k.split('-');
+      html += `<div class="ex-month-group">
+        <div class="ex-month-head">${y} 年 ${parseInt(m)} 月</div>
+        ${byMonth[k].map(exhibitionCard).join('')}
+      </div>`;
+    }
+  }
+
+  root.innerHTML = html;
+
+  $('#ex-month-filter')?.addEventListener('change', (e) => {
+    filter.month = e.target.value;
+    renderExhibitions();
+  });
+  $('#ex-country-filter')?.addEventListener('change', (e) => {
+    filter.country = e.target.value;
+    renderExhibitions();
+  });
+  $('#ex-add')?.addEventListener('click', () => openExhibitionModal());
+  $('#ex-import')?.addEventListener('click', () => openExhibitionImportModal());
+  $$('.ex-card', root).forEach(el => {
+    el.onclick = () => openExhibitionModal(el.dataset.exId);
+  });
+}
+
+function exhibitionCard(e) {
+  const startDate = fmtDate(e.dateStart);
+  const endDate = fmtDate(e.dateEnd);
+  const dateStr = e.dateStart === e.dateEnd ? startDate : `${startDate} — ${endDate}`;
+  const daysAway = Math.ceil((parseLocalDate(e.dateStart) - new Date(todayISO())) / 86400000);
+  const badge = daysAway <= 0 ? '<span class="ex-badge ongoing">进行中</span>'
+              : daysAway <= 30 ? `<span class="ex-badge soon">${daysAway} 天</span>`
+              : `<span class="ex-badge future">${daysAway} 天</span>`;
+  return `<div class="ex-card" data-ex-id="${e.id}">
+    <div class="ex-card-head">
+      <span class="ex-country-flag">${escapeHtml(e.country || '?')}</span>
+      <span class="ex-card-title">${escapeHtml(e.name)}</span>
+      ${badge}
+    </div>
+    <div class="ex-card-meta muted small">
+      <span>📅 ${dateStr}</span>
+      ${e.city ? `<span>📍 ${escapeHtml(e.city)}</span>` : ''}
+      ${e.frequency ? `<span>${escapeHtml(e.frequency)}</span>` : ''}
+      ${e.agent ? '<span class="ex-agent-tag">中国区总代</span>' : ''}
+    </div>
+    ${e.notes ? `<div class="ex-card-notes muted small">${escapeHtml(e.notes)}</div>` : ''}
+  </div>`;
+}
+
+/** 展会新建/编辑弹窗 */
+function openExhibitionModal(exId) {
+  const isNew = !exId;
+  const e = isNew ? {
+    id: uuid(), name: '', dateStart: '', dateEnd: '', country: '', city: '',
+    frequency: '', agent: false, notes: '',
+  } : { ...State.exhibitions.find(x => x.id === exId) };
+  if (!e) return;
+
+  openModal({
+    title: isNew ? '新增展会' : '编辑展会',
+    body: `
+      <label>展会名称 <input id="ex-name" value="${escapeHtml(e.name)}" placeholder="如:墨西哥国际家具展 TECNO MUEBLE"></label>
+      <div class="row">
+        <label class="flex1">开始日期 <input type="date" id="ex-date-start" value="${e.dateStart||''}"></label>
+        <label class="flex1">结束日期 <input type="date" id="ex-date-end" value="${e.dateEnd||''}"></label>
+      </div>
+      <div class="row">
+        <label class="flex1">国家 <input id="ex-country" value="${escapeHtml(e.country||'')}" placeholder="如:墨西哥"></label>
+        <label class="flex1">城市 <input id="ex-city" value="${escapeHtml(e.city||'')}" placeholder="如:瓜达拉哈拉"></label>
+      </div>
+      <div class="row">
+        <label class="flex1">届数/周期 <input id="ex-freq" value="${escapeHtml(e.frequency||'')}" placeholder="如:一年一届"></label>
+        <label class="flex1"><input type="checkbox" id="ex-agent" ${e.agent?'checked':''}> 中国区总代</label>
+      </div>
+      <label>备注 <textarea id="ex-notes" rows="2">${escapeHtml(e.notes||'')}</textarea></label>
+    `,
+    actions: [
+      { label: '取消', onClick: closeModal },
+      ...(isNew ? [] : [{ label: '删除', danger: true, onClick: () => {
+        if (!confirm(`删除展会「${e.name}」?`)) return;
+        State.exhibitions = State.exhibitions.filter(x => x.id !== exId);
+        persistExhibitions();
+        closeModal();
+        renderExhibitions();
+        toast('已删除');
+      }}]),
+      { label: '保存', primary: true, onClick: () => {
+        const name = $('#ex-name').value.trim();
+        const ds = $('#ex-date-start').value;
+        const de = $('#ex-date-end').value || ds;
+        if (!name) { toast('请填写展会名称'); return; }
+        if (!ds) { toast('请选择开始日期'); return; }
+        const payload = {
+          id: e.id, name,
+          dateStart: ds, dateEnd: de,
+          country: $('#ex-country').value.trim() || extractExCountry(name),
+          city: $('#ex-city').value.trim(),
+          frequency: $('#ex-freq').value.trim(),
+          agent: $('#ex-agent').checked,
+          notes: $('#ex-notes').value.trim(),
+          createdAt: e.createdAt || new Date().toISOString(),
+        };
+        if (isNew) State.exhibitions.push(payload);
+        else State.exhibitions = State.exhibitions.map(x => x.id === exId ? payload : x);
+        persistExhibitions();
+        closeModal();
+        renderExhibitions();
+        toast(isNew ? '已添加' : '已保存');
+      }},
+    ],
+  });
+}
+
+/** 导入弹窗:粘贴表格文本(TAB / 空格分隔) */
+function openExhibitionImportModal() {
+  openModal({
+    title: '📥 导入展会',
+    body: `
+      <div class="muted small" style="margin-bottom:8px;line-height:1.5">
+        把 Word 展会计划表里的表格<b>复制粘贴</b>到下面(4 列:日期 / 名称 / 届数 / 城市)。<br>
+        支持 TAB 或多个空格分隔;跨行的名称会自动合并。
+      </div>
+      <textarea id="ex-import-text" rows="10" placeholder="示例:
+2026.08.19-22\t墨西哥国际家具、家具配件及木工机械展TECNO MUEBLE\t一年一届\t瓜达拉哈拉
+2026.08.25-28\t美国亚特兰大国际家具配件及木工机械展IWF\t两年一届\t亚特兰大"></textarea>
+      <div id="ex-import-preview" class="muted small" style="margin-top:8px"></div>
+    `,
+    actions: [
+      { label: '取消', onClick: closeModal },
+      { label: '预览', onClick: () => {
+        const raw = $('#ex-import-text').value;
+        const parsed = parseExhibitionText(raw);
+        const box = $('#ex-import-preview');
+        if (!parsed.length) { box.innerHTML = '<span style="color:var(--c-red)">未解析到任何行</span>'; return; }
+        box.innerHTML = `<b>识别到 ${parsed.length} 场:</b><br>` +
+          parsed.slice(0, 10).map(p => `· ${p.dateStart} — ${p.name.slice(0,30)} <span class="muted">(${p.country||'?'})</span>`).join('<br>') +
+          (parsed.length > 10 ? `<br>… 还有 ${parsed.length-10} 场` : '');
+      }},
+      { label: '导入', primary: true, onClick: () => {
+        const raw = $('#ex-import-text').value;
+        const parsed = parseExhibitionText(raw);
+        if (!parsed.length) { toast('未解析到有效展会,请检查格式'); return; }
+        // 去重:同名 + 同开始日期 判为重复
+        const existKey = new Set(State.exhibitions.map(e => `${e.name}::${e.dateStart}`));
+        let added = 0, skipped = 0;
+        for (const p of parsed) {
+          const k = `${p.name}::${p.dateStart}`;
+          if (existKey.has(k)) { skipped++; continue; }
+          existKey.add(k);
+          State.exhibitions.push(p);
+          added++;
+        }
+        persistExhibitions();
+        closeModal();
+        renderExhibitions();
+        toast(`导入完成:新增 ${added} 场${skipped?`,跳过 ${skipped} 场重复`:''}`);
+      }},
+    ],
+  });
 }
 
 function navigateTripMonth(delta) {
@@ -2897,12 +3249,13 @@ function switchTab(tab) {
 function renderCurrentView() {
   const tab = State.ui.tab;
   if (tab === 'today') renderToday();
-  else if (tab === 'week') renderWeek();
-  else if (tab === 'people') renderPeople();
+  else if (tab === 'customer') renderCustomerView();
+  else if (tab === 'team') renderTeamView();
   else if (tab === 'rhythm') renderRhythm();
   else if (tab === 'trip') renderTrip();
+  else if (tab === 'exhibition') renderExhibitions();
   else if (tab === 'notes') renderNotes();
-  // 每次切换/渲染任何视图都同步徽章(不只是今日)
+  // 每次切换/渲染任何视图都同步徽章
   updateBadges();
 }
 
@@ -3514,6 +3867,7 @@ function init() {
   $('#fab').onclick = () => {
     if (State.ui.tab === 'notes') openNoteModal();
     else if (State.ui.tab === 'trip') openTripModal();
+    else if (State.ui.tab === 'exhibition') openExhibitionModal();
     else openTaskModal();
   };
 
