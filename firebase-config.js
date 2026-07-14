@@ -53,7 +53,7 @@ window.AmandaFirebase = {
   collMap: {
     tasks: 'tasks', persons: 'persons',
     trips: 'trips', templates: 'templates',
-    notes: 'notes',
+    notes: 'notes', fuzzyPlans: 'fuzzyPlans',
   },
 
   /* ============= 加密层(Web Crypto API)============= */

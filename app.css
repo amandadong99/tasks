@@ -1025,11 +1025,11 @@ body.reordering .person-card { transition: transform .18s ease; }
   display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 12px;
 }
 .trip-type-tag {
-  display: inline-flex; align-items: center; gap: 4px;
-  padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 500;
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 4px 10px; border-radius: 12px; font-size: 13px; font-weight: 500;
 }
 .trip-type-tag .dot {
-  width: 6px; height: 6px; border-radius: 50%;
+  width: 8px; height: 8px; border-radius: 50%;
 }
 .trip-type-pill {
   font-size: 12px; padding: 2px 8px; border-radius: 8px;
@@ -1046,12 +1046,12 @@ body.reordering .person-card { transition: transform .18s ease; }
 }
 .trip-cal-arrow {
   background: transparent; border: none;
-  font-size: 22px; line-height: 1; color: var(--c-text-muted);
+  font-size: 26px; line-height: 1; color: var(--c-text-muted);
   cursor: pointer; padding: 4px 12px; border-radius: 6px;
-  font-family: inherit; min-width: 40px;
+  font-family: inherit; min-width: 44px;
 }
 .trip-cal-arrow:active { background: rgba(0,0,0,0.06); }
-.trip-cal-title { font-size: 15px; font-weight: 600; }
+.trip-cal-title { font-size: 19px; font-weight: 600; }
 
 .trip-calendar {
   background: var(--c-card); border: 0.5px solid var(--c-border);
@@ -1063,8 +1063,8 @@ body.reordering .person-card { transition: transform .18s ease; }
 }
 .trip-cal-weekdays {
   display: grid; grid-template-columns: repeat(7, 1fr);
-  font-size: 11px; color: var(--c-text-muted); text-align: center;
-  padding: 8px 0 4px;
+  font-size: 14px; color: var(--c-text-muted); text-align: center;
+  padding: 10px 0 6px; font-weight: 500;
 }
 .trip-cal-grid {
   display: grid; grid-template-columns: repeat(7, 1fr);
@@ -1086,20 +1086,20 @@ body.reordering .person-card { transition: transform .18s ease; }
 /* 今天的日期用红色圆圈标记数字,不再用整格底色(避免遮挡行程色条)*/
 .trip-cal-cell.is-today .trip-cal-num {
   display: inline-flex; align-items: center; justify-content: center;
-  min-width: 20px; height: 20px; padding: 0 4px;
+  min-width: 24px; height: 24px; padding: 0 5px;
   background: var(--c-red); color: #fff !important;
   border-radius: 50%; font-weight: 700;
   box-sizing: border-box;
 }
 .trip-cal-num {
-  font-size: 11px; color: var(--c-text);
+  font-size: 15px; font-weight: 500; color: var(--c-text);
   position: relative; z-index: 2;
 }
 /* 节假日小标签:贴在日期数字下方,红色淡背景 */
 .trip-cal-holiday {
   position: absolute;
-  top: 18px; left: 2px; right: 2px;
-  font-size: 9px;
+  top: 22px; left: 2px; right: 2px;
+  font-size: 11px;
   font-weight: 600;
   color: #B91C1C;
   background: rgba(254, 226, 226, 0.85);
@@ -1120,14 +1120,66 @@ body.reordering .person-card { transition: transform .18s ease; }
 }
 .trip-cal-bar {
   position: absolute;
-  color: #fff; font-size: 10px; font-weight: 600;
-  padding: 1px 6px; box-sizing: border-box;
+  color: #fff; font-size: 13px; font-weight: 600;
+  padding: 2px 8px; box-sizing: border-box;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   pointer-events: auto; cursor: pointer;
-  line-height: 14px;
+  line-height: 18px;
   box-shadow: 0 1px 2px rgba(0,0,0,0.12);
 }
 .trip-cal-bar:hover { opacity: 0.85; }
+
+/* ---- 来访/模糊计划板块 ---- */
+.fuzzy-plans {
+  margin-top: 4px; margin-bottom: 16px;
+  background: var(--c-card); border: 0.5px solid var(--c-border);
+  border-radius: 12px; padding: 12px 14px;
+}
+.fp-head {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.fp-title { font-size: 15px; font-weight: 600; }
+.fp-input-row {
+  display: flex; gap: 8px; margin-bottom: 10px;
+}
+.fp-input-row input {
+  flex: 1;
+  padding: 10px 12px;
+  border: 0.5px solid var(--c-border);
+  border-radius: 10px;
+  font-size: 15px;
+  font-family: inherit;
+  background: var(--c-bg);
+}
+.fp-input-row input:focus {
+  outline: none;
+  border-color: var(--c-primary);
+  background: #fff;
+}
+.fp-list { display: flex; flex-direction: column; gap: 6px; }
+.fp-empty { padding: 8px 0; }
+.fp-item {
+  display: flex; align-items: center; gap: 8px;
+  background: #FFF9EC;
+  border-left: 3px solid #F0B72E;
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.fp-text {
+  flex: 1; font-size: 15px; line-height: 1.45;
+  word-break: break-word;
+}
+.fp-actions { display: flex; gap: 4px; flex-shrink: 0; }
+.btn-icon {
+  border: none; background: transparent;
+  width: 30px; height: 30px; border-radius: 6px;
+  font-size: 18px; color: var(--c-text-muted);
+  cursor: pointer; padding: 0;
+}
+.btn-icon:hover { background: rgba(0,0,0,0.05); }
+.btn-icon.danger { color: var(--c-red); }
+.btn-icon.danger:hover { background: var(--c-red-soft); }
 
 /* 出差列表卡片 - 折叠/展开 */
 .trip-card-head {

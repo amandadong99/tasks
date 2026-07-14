@@ -8,7 +8,7 @@
 'use strict';
 
 /* === 版本号(与 service-worker.js 的 CACHE_VERSION 保持一致)=== */
-const APP_VERSION = 'v5.5';
+const APP_VERSION = 'v5.6';
 
 /* ---------------------------------------------------------------------
  * 0. 工具函数
@@ -58,6 +58,7 @@ const KEY = {
   persons: 'amanda.persons',
   trips: 'amanda.trips',
   templates: 'amanda.tripTemplates',
+  fuzzyPlans: 'amanda.fuzzyPlans',
   notes: 'amanda.notes',
   meta: 'amanda.meta',
   docKey: 'amanda.docKey',
@@ -189,6 +190,7 @@ const TRIP_TYPES = {
   paidExpo: { name: '付费展会', color: '#F59E0B', shades: ['#F59E0B', '#FBBF24', '#FCD34D', '#FDE68A'], soft: '#FEF3C7' },
   freeExpo: { name: '免费展会', color: '#3B82F6', shades: ['#3B82F6', '#60A5FA', '#93C5FD', '#BFDBFE'], soft: '#DBEAFE' },
   visit:    { name: '拜访客户', color: '#7C3AED', shades: ['#7C3AED', '#A78BFA', '#C4B5FD', '#DDD6FE'], soft: '#EDE9FE' },
+  incoming: { name: '客户来访', color: '#D97706', shades: ['#D97706', '#F59E0B', '#FBBF24', '#FCD34D'], soft: '#FEF3C7' },
   inspect:  { name: '考察',     color: '#10B981', shades: ['#10B981', '#34D399', '#6EE7B7', '#A7F3D0'], soft: '#D1FAE5' },
   travel:   { name: '旅行',     color: '#EC4899', shades: ['#EC4899', '#F472B6', '#F9A8D4', '#FBCFE8'], soft: '#FCE7F3' },
   other:    { name: '其他',     color: '#6B7280', shades: ['#6B7280', '#9CA3AF', '#D1D5DB', '#E5E7EB'], soft: '#F3F4F6' },
@@ -380,6 +382,7 @@ const State = {
   persons: [],
   trips: [],
   templates: [],
+  fuzzyPlans: [],   // 客户模糊来访计划 { id, text, createdAt }
   notes: [],
   ui: { tab: 'today', peopleFilter: 'all', rhythmTab: 'frequency',
         notesFilter: 'all', tripView: 'calendar',
@@ -407,6 +410,7 @@ function initData() {
     State.tasks = Store.load(KEY.tasks, []);
     State.templates = Store.load(KEY.templates, seedTemplates());
     State.trips = Store.load(KEY.trips, []);
+    State.fuzzyPlans = Store.load(KEY.fuzzyPlans, []);
     State.notes = Store.load(KEY.notes, []);
   }
   // 自动生成日期型任务的当日实例
@@ -491,10 +495,10 @@ function migrateTripTemplates() {
 }
 
 /* 持久化 + Firebase 同步 */
-const _syncSnapshot = { tasks: null, persons: null, trips: null, templates: null, notes: null };
+const _syncSnapshot = { tasks: null, persons: null, trips: null, templates: null, notes: null, fuzzyPlans: null };
 
 function captureSyncSnapshot() {
-  for (const k of ['tasks', 'persons', 'trips', 'templates', 'notes']) {
+  for (const k of ['tasks', 'persons', 'trips', 'templates', 'notes', 'fuzzyPlans']) {
     _syncSnapshot[k] = JSON.stringify(State[k]);
   }
 }
@@ -530,6 +534,7 @@ function persistPersons() { Store.save(KEY.persons, State.persons); _syncToFireb
 function persistTrips() { Store.save(KEY.trips, State.trips); _syncToFirebase('trips'); }
 function persistTemplates() { Store.save(KEY.templates, State.templates); _syncToFirebase('templates'); }
 function persistNotes() { Store.save(KEY.notes, State.notes); _syncToFirebase('notes'); }
+function persistFuzzyPlans() { Store.save(KEY.fuzzyPlans, State.fuzzyPlans); _syncToFirebase('fuzzyPlans'); }
 
 /* ---------------------------------------------------------------------
  * 4. 业务逻辑工具
@@ -1665,18 +1670,66 @@ function renderTrip() {
     ).join('')}
   </div>`;
 
-  if (!trips.length) {
+  if (State.ui.tripView === 'calendar') {
+    // 日历视图:即使没有出差也显示日历 + 模糊计划板块(空日历也能看节假日)
+    html += renderTripCalendar(trips);
+    if (!trips.length) {
+      html += `<div class="empty" style="padding:16px;margin-top:8px">
+        <div class="empty-sub">还没有确定日期的出差 · 点右上「+ 新建出差」</div>
+      </div>`;
+    }
+    html += renderFuzzyPlans();
+  } else if (!trips.length) {
     html += `<div class="empty">
       <div class="empty-emoji">✈</div>
       <div class="empty-title">还没有出差行程</div>
       <div class="empty-sub">点击 + 新建出差,系统按出发日期自动倒推所有提醒</div>
     </div>`;
-  } else if (State.ui.tripView === 'calendar') {
-    html += renderTripCalendar(trips);
   } else {
     html += trips.map(tripCard).join('');
   }
   root.innerHTML = html;
+
+  // === 模糊计划:绑定新增/删除 ===
+  const fpAdd = $('#fp-add-btn');
+  if (fpAdd) {
+    fpAdd.onclick = () => {
+      const input = $('#fp-input');
+      const text = (input.value || '').trim();
+      if (!text) { toast('请先输入计划内容'); return; }
+      State.fuzzyPlans.push({
+        id: uuid(), text, createdAt: new Date().toISOString(),
+      });
+      persistFuzzyPlans();
+      input.value = '';
+      renderTrip();
+    };
+  }
+  $$('[data-fp-del]', root).forEach(b => {
+    b.onclick = () => {
+      const id = b.dataset.fpDel;
+      const item = State.fuzzyPlans.find(x => x.id === id);
+      if (!confirm(`删除这条计划?\n\n"${item?.text || ''}"`)) return;
+      State.fuzzyPlans = State.fuzzyPlans.filter(x => x.id !== id);
+      persistFuzzyPlans();
+      renderTrip();
+    };
+  });
+  $$('[data-fp-edit]', root).forEach(b => {
+    b.onclick = () => {
+      const id = b.dataset.fpEdit;
+      const item = State.fuzzyPlans.find(x => x.id === id);
+      if (!item) return;
+      const newText = prompt('编辑来访计划', item.text);
+      if (newText == null) return;
+      const t = newText.trim();
+      if (!t) return;
+      item.text = t;
+      item.updatedAt = new Date().toISOString();
+      persistFuzzyPlans();
+      renderTrip();
+    };
+  });
 
   $('[data-act="new-trip"]')?.addEventListener('click', () => openTripModal());
   $('[data-act="manage-templates"]')?.addEventListener('click', () => openTemplateManager());
@@ -1732,6 +1785,35 @@ function renderTrip() {
       openTripDetail(b.dataset.tripId);
     };
   });
+}
+
+/** 模糊来访计划板块:输入框 + 已有计划列表 */
+function renderFuzzyPlans() {
+  const list = [...(State.fuzzyPlans || [])].sort((a, b) =>
+    (b.createdAt || '').localeCompare(a.createdAt || ''));
+  let itemsHtml = '';
+  if (!list.length) {
+    itemsHtml = `<div class="fp-empty muted small">还没有模糊计划 — 客户何时来中国还没定日期的都写这里</div>`;
+  } else {
+    itemsHtml = list.map(fp => `<div class="fp-item">
+      <div class="fp-text">${escapeHtml(fp.text)}</div>
+      <div class="fp-actions">
+        <button class="btn-icon" data-fp-edit="${fp.id}" title="编辑">✎</button>
+        <button class="btn-icon danger" data-fp-del="${fp.id}" title="删除">×</button>
+      </div>
+    </div>`).join('');
+  }
+  return `<div class="fuzzy-plans">
+    <div class="fp-head">
+      <span class="fp-title">📝 来访/模糊计划</span>
+      <span class="muted small">日期未定的先记这里,一旦确定就 + 新建出差</span>
+    </div>
+    <div class="fp-input-row">
+      <input id="fp-input" type="text" placeholder="例:XXX 客户计划 10 月来中国 3 天" />
+      <button id="fp-add-btn" class="btn btn-primary btn-small">添加</button>
+    </div>
+    <div class="fp-list">${itemsHtml}</div>
+  </div>`;
 }
 
 function navigateTripMonth(delta) {
@@ -1810,9 +1892,9 @@ function renderTripCalendarMonth(year, month, trips) {
 
   // 给每条出差分配"槽位"+ "色阶"(同类型重叠用不同浅色)
   const { maxSlot } = _assignTripVisuals(monthTrips);
-  const SLOT_HEIGHT = 16;        // 每条色条高 16px
-  const SLOT_GAP = 2;            // 色条间距 2px
-  const HEAD_RESERVE = 22;       // 顶部留给日期数字的高度
+  const SLOT_HEIGHT = 20;        // 每条色条高 20px(v5.6 字号放大)
+  const SLOT_GAP = 3;            // 色条间距 3px
+  const HEAD_RESERVE = 28;       // 顶部留给日期数字的高度(数字变大)
   const ROW_HEIGHT = HEAD_RESERVE + Math.max(maxSlot, 1) * (SLOT_HEIGHT + SLOT_GAP) + 4;
 
   // 周日开始的网格
