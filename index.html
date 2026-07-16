@@ -133,18 +133,25 @@
 
     window.addEventListener('load', async () => {
       try {
-        const reg = await navigator.serviceWorker.register('service-worker.js');
+        // updateViaCache:'none' 让浏览器每次都绕过 HTTP 缓存直接从网络拉 SW 文件
+        // 否则 GH Pages 默认给 .js 文件 10 分钟缓存,更新根本发现不了
+        const reg = await navigator.serviceWorker.register('service-worker.js', {
+          updateViaCache: 'none',
+        });
 
-        // 启动时立刻检查更新
+        // 启动时立刻检查更新(带时间戳,双保险绕过任何中间缓存)
         reg.update().catch(() => {});
 
-        // 每 30 分钟自动检查一次新版本
-        setInterval(() => reg.update().catch(() => {}), 30 * 60 * 1000);
+        // 每 10 分钟自动检查一次新版本(比之前 30 分钟更及时)
+        setInterval(() => reg.update().catch(() => {}), 10 * 60 * 1000);
 
         // 切回前台时也检查一次
         document.addEventListener('visibilitychange', () => {
           if (!document.hidden) reg.update().catch(() => {});
         });
+
+        // 网络恢复时也检查
+        window.addEventListener('online', () => reg.update().catch(() => {}));
 
         // 发现新 SW 安装就绪 → 显示横幅,让用户一键应用
         const handleNewWorker = (worker) => {

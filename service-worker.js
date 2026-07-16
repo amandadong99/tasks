@@ -2,7 +2,7 @@
  * Service Worker - 离线缓存 + Push 推送接收
  * ===================================================================== */
 
-const CACHE_VERSION = 'amanda-tasks-v5.7-tabs-restructure-exhibitions';
+const CACHE_VERSION = 'amanda-tasks-v5.7.1-fix-update-detection';
 const CORE_FILES = [
   './',
   './index.html',
@@ -46,10 +46,32 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   // 仅缓存 GET 请求
   if (event.request.method !== 'GET') return;
+
+  const url = new URL(event.request.url);
+  // 绝不缓存 SW 文件自己 —— 一旦缓存,更新流程会永远卡住
+  if (url.pathname.endsWith('/service-worker.js')) return;
+
+  // index.html 用"网络优先"策略(拿到新版就用新版,超时/离线降级到缓存)
+  // 这样版本切换后立刻能看到新入口,不用等下一次冷启动
+  const isHtml = url.pathname.endsWith('/') || url.pathname.endsWith('.html');
+  if (isHtml && url.origin === self.location.origin) {
+    event.respondWith(
+      fetch(event.request).then(net => {
+        if (net && net.ok) {
+          const copy = net.clone();
+          caches.open(CACHE_VERSION).then(c => c.put(event.request, copy));
+        }
+        return net;
+      }).catch(() => caches.match(event.request))
+    );
+    return;
+  }
+
+  // 其他静态资源:缓存优先 + 后台更新(stale-while-revalidate)
   event.respondWith(
     caches.match(event.request).then(cached => {
       const fetchPromise = fetch(event.request).then(net => {
-        if (net && net.ok && new URL(event.request.url).origin === self.location.origin) {
+        if (net && net.ok && url.origin === self.location.origin) {
           const copy = net.clone();
           caches.open(CACHE_VERSION).then(c => c.put(event.request, copy));
         }
