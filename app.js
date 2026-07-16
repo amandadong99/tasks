@@ -8,7 +8,7 @@
 'use strict';
 
 /* === 版本号(与 service-worker.js 的 CACHE_VERSION 保持一致)=== */
-const APP_VERSION = 'v5.7.1';
+const APP_VERSION = 'v5.8';
 
 /* ---------------------------------------------------------------------
  * 0. 工具函数
@@ -1714,6 +1714,7 @@ function renderTrip() {
   <div class="trip-view-toggle">
     <button class="chip ${State.ui.tripView === 'calendar' ? 'active' : ''}" data-tv="calendar">📅 日历</button>
     <button class="chip ${State.ui.tripView === 'list' ? 'active' : ''}" data-tv="list">📋 列表</button>
+    <button class="chip chip-fp-jump" data-jump="fuzzy">📝 客户来访计划</button>
   </div>
   <div class="trip-type-legend">
     ${Object.entries(TRIP_TYPES).map(([k, v]) =>
@@ -1781,11 +1782,26 @@ function renderTrip() {
       renderTrip();
     };
   });
+  // 长按拖动排序
+  bindFuzzyPlanReorder(root);
 
   $('[data-act="new-trip"]')?.addEventListener('click', () => openTripModal());
   $('[data-act="manage-templates"]')?.addEventListener('click', () => openTemplateManager());
   $$('.trip-view-toggle .chip').forEach(c => {
     c.onclick = () => {
+      // "客户来访计划" chip:如果不在日历模式,先切到日历模式,然后滚动到板块
+      if (c.dataset.jump === 'fuzzy') {
+        if (State.ui.tripView !== 'calendar') {
+          State.ui.tripView = 'calendar';
+          renderTrip();
+          setTimeout(() => document.querySelector('.fuzzy-plans')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
+        } else {
+          document.querySelector('.fuzzy-plans')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          // 顺便让输入框聚焦
+          setTimeout(() => document.querySelector('#fp-input')?.focus(), 260);
+        }
+        return;
+      }
       State.ui.tripView = c.dataset.tv;
       renderTrip();
     };
@@ -1838,15 +1854,93 @@ function renderTrip() {
   });
 }
 
+/* ---- 客户来访计划:长按拖动排序 ---- */
+let _fpDrag = null;
+function bindFuzzyPlanReorder(root) {
+  $$('.fp-item', root).forEach(item => {
+    let holdTimer = null, sx = 0, sy = 0;
+    item.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      if (e.target.closest('button, input, textarea')) return;
+      sx = e.clientX; sy = e.clientY;
+      holdTimer = setTimeout(() => { holdTimer = null; _startFpDrag(item, e); }, 400);
+    });
+    item.addEventListener('pointermove', (e) => {
+      if (holdTimer && (Math.abs(e.clientY - sy) > 8 || Math.abs(e.clientX - sx) > 8)) {
+        clearTimeout(holdTimer); holdTimer = null;
+      }
+      if (_fpDrag && _fpDrag.item === item) _onFpDrag(e);
+    });
+    const stop = () => {
+      if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
+      if (_fpDrag && _fpDrag.item === item) _endFpDrag();
+    };
+    item.addEventListener('pointerup', stop);
+    item.addEventListener('pointercancel', stop);
+  });
+}
+function _startFpDrag(item, e) {
+  try { item.setPointerCapture(e.pointerId); } catch {}
+  item.classList.add('is-dragging');
+  document.body.classList.add('reordering');
+  if (navigator.vibrate) { try { navigator.vibrate(25); } catch {} }
+  _fpDrag = { item, pointerId: e.pointerId, refY: e.clientY };
+}
+function _onFpDrag(e) {
+  const s = _fpDrag;
+  const dy = e.clientY - s.refY;
+  s.item.style.transform = `translateY(${dy}px)`;
+  const parent = s.item.parentElement;
+  const siblings = Array.from(parent.querySelectorAll('.fp-item')).filter(x => x !== s.item);
+  for (const sib of siblings) {
+    const r = sib.getBoundingClientRect();
+    const mid = r.top + r.height / 2;
+    const rel = s.item.compareDocumentPosition(sib);
+    if (e.clientY < mid && (rel & Node.DOCUMENT_POSITION_PRECEDING)) {
+      parent.insertBefore(s.item, sib);
+      s.item.style.transform = '';
+      s.refY = e.clientY;
+      return;
+    }
+    if (e.clientY > mid && (rel & Node.DOCUMENT_POSITION_FOLLOWING)) {
+      parent.insertBefore(s.item, sib.nextSibling);
+      s.item.style.transform = '';
+      s.refY = e.clientY;
+      return;
+    }
+  }
+}
+function _endFpDrag() {
+  const s = _fpDrag; _fpDrag = null;
+  try { s.item.releasePointerCapture(s.pointerId); } catch {}
+  s.item.classList.remove('is-dragging');
+  s.item.style.transform = '';
+  document.body.classList.remove('reordering');
+  const parent = s.item.parentElement;
+  Array.from(parent.querySelectorAll('.fp-item')).forEach((el, i) => {
+    const id = el.dataset.fpId;
+    const p = State.fuzzyPlans.find(x => x.id === id);
+    if (p) p.sortOrder = (i + 1) * 1000;
+  });
+  persistFuzzyPlans();
+  toast('顺序已保存');
+}
+
 /** 模糊来访计划板块:输入框 + 已有计划列表 */
 function renderFuzzyPlans() {
-  const list = [...(State.fuzzyPlans || [])].sort((a, b) =>
-    (b.createdAt || '').localeCompare(a.createdAt || ''));
+  // 排序:优先手动 sortOrder,其次按创建时间倒序
+  const list = [...(State.fuzzyPlans || [])].sort((a, b) => {
+    const ao = a.sortOrder, bo = b.sortOrder;
+    if (ao != null && bo != null) return ao - bo;
+    if (ao != null) return -1;
+    if (bo != null) return 1;
+    return (b.createdAt || '').localeCompare(a.createdAt || '');
+  });
   let itemsHtml = '';
   if (!list.length) {
     itemsHtml = `<div class="fp-empty muted small">还没有模糊计划 — 客户何时来中国还没定日期的都写这里</div>`;
   } else {
-    itemsHtml = list.map(fp => `<div class="fp-item">
+    itemsHtml = list.map(fp => `<div class="fp-item" data-fp-id="${fp.id}">
       <div class="fp-text">${escapeHtml(fp.text)}</div>
       <div class="fp-actions">
         <button class="btn-icon" data-fp-edit="${fp.id}" title="编辑">✎</button>
@@ -2506,14 +2600,143 @@ function openTemplateManager() {
     title: '出差模板',
     body: `<div class="tpl-list">
       ${State.templates.map(tp => `
-        <div class="card tpl-card">
+        <div class="card tpl-card" data-tpl-id="${tp.id}">
           <div class="tpl-name">${escapeHtml(tp.name)}${tp.isBuiltIn?' <span class="muted small">(预置)</span>':''}</div>
-          <div class="muted small">${tp.tasks.length} 条任务</div>
+          <div class="muted small">${tp.tasks.length} 条任务 · 点击编辑</div>
         </div>`).join('')}
     </div>
-    <div class="muted small">第一版预置 3 个模板,自定义模板编辑功能可在第二版扩展。</div>`,
-    actions: [{ label: '关闭', onClick: closeModal }],
+    <div class="muted small">点击任意模板可编辑名称和任务清单。预置模板改动后会脱离预置版本(不会自动更新)。</div>`,
+    actions: [
+      { label: '关闭', onClick: closeModal },
+      { label: '+ 新建模板', primary: true, onClick: () => {
+        closeModal();
+        openTemplateEditor(null);
+      }},
+    ],
   });
+  // 绑点击进入编辑
+  setTimeout(() => {
+    $$('.tpl-card[data-tpl-id]').forEach(card => {
+      card.onclick = () => {
+        closeModal();
+        openTemplateEditor(card.dataset.tplId);
+      };
+    });
+  }, 0);
+}
+
+/** 出差模板编辑器:改名称 + 任务清单增删 */
+function openTemplateEditor(tplId) {
+  const isNew = !tplId;
+  const tp = isNew
+    ? { id: 'tpl-' + uuid().slice(0, 8), name: '', tasks: [], isBuiltIn: false }
+    : { ...State.templates.find(x => x.id === tplId) };
+  if (!tp) return;
+  // 深拷贝 tasks 免得直接改到 State
+  tp.tasks = (tp.tasks || []).map(t => ({ ...t }));
+
+  const renderTasksList = () => {
+    return tp.tasks.map((task, i) => `
+      <div class="tpl-task-row" data-idx="${i}">
+        <input class="tpl-t-title" type="text" value="${escapeHtml(task.title||'')}" placeholder="任务标题" />
+        <select class="tpl-t-stage">
+          ${['出行准备','客户排期','行程后跟进'].map(s =>
+            `<option value="${s}" ${task.stage===s?'selected':''}>${s}</option>`).join('')}
+        </select>
+        <input class="tpl-t-days" type="number" value="${task.daysBeforeDeparture ?? 0}" style="width:64px" title="出发前几天(负数=行程后几天)" />
+        <select class="tpl-t-alert">
+          ${['红色警告','琥珀提醒','普通'].map(a =>
+            `<option value="${a}" ${task.alertLevel===a?'selected':''}>${a}</option>`).join('')}
+        </select>
+        <button class="btn-icon danger" data-tpl-del-task="${i}" type="button">×</button>
+      </div>`).join('');
+  };
+
+  openModal({
+    title: isNew ? '新建模板' : '编辑模板',
+    body: `
+      <label>模板名称 <input id="tpl-e-name" value="${escapeHtml(tp.name)}" placeholder="如:欧洲展会 5 天"></label>
+      <div class="row" style="align-items:center;gap:8px;margin-bottom:8px">
+        <b style="flex:1">任务清单 <span class="muted small">共 <span id="tpl-e-count">${tp.tasks.length}</span> 条</span></b>
+        <button type="button" class="btn btn-small" id="tpl-e-add-task">+ 加一条</button>
+      </div>
+      <div class="muted small" style="margin-bottom:8px">
+        列名:标题 · 阶段 · 出发前 N 天(负数=行程结束后 N 天) · 提醒等级
+      </div>
+      <div id="tpl-e-tasks">${renderTasksList()}</div>
+    `,
+    actions: [
+      { label: '取消', onClick: closeModal },
+      ...(isNew || tp.isBuiltIn ? [] : [{ label: '删除模板', danger: true, onClick: () => {
+        if (!confirm(`删除模板「${tp.name}」?已用它派生的出差任务不受影响。`)) return;
+        State.templates = State.templates.filter(x => x.id !== tplId);
+        persistTemplates();
+        closeModal();
+        toast('已删除');
+      }}]),
+      { label: '保存', primary: true, onClick: () => {
+        const name = $('#tpl-e-name').value.trim();
+        if (!name) { toast('请填模板名称'); return; }
+        // 从 DOM 收集任务清单最新状态
+        const rows = $$('#tpl-e-tasks .tpl-task-row');
+        const newTasks = [];
+        for (const r of rows) {
+          const title = r.querySelector('.tpl-t-title').value.trim();
+          if (!title) continue;  // 空标题跳过
+          newTasks.push({
+            title,
+            stage: r.querySelector('.tpl-t-stage').value,
+            daysBeforeDeparture: parseInt(r.querySelector('.tpl-t-days').value, 10) || 0,
+            alertLevel: r.querySelector('.tpl-t-alert').value,
+          });
+        }
+        const payload = {
+          ...tp,
+          name,
+          tasks: newTasks,
+          isBuiltIn: false,   // 编辑后不再算预置(用户不希望被覆盖)
+          updatedAt: new Date().toISOString(),
+        };
+        if (isNew) State.templates.push(payload);
+        else State.templates = State.templates.map(x => x.id === tplId ? payload : x);
+        persistTemplates();
+        closeModal();
+        toast(isNew ? '模板已创建' : '模板已保存');
+      }},
+    ],
+  });
+
+  // 绑增/删任务行
+  setTimeout(() => {
+    const list = $('#tpl-e-tasks');
+    const countEl = $('#tpl-e-count');
+    const rebindDel = () => {
+      $$('[data-tpl-del-task]', list).forEach(b => {
+        b.onclick = () => {
+          const idx = parseInt(b.dataset.tplDelTask, 10);
+          tp.tasks.splice(idx, 1);
+          list.innerHTML = renderTasksList();
+          countEl.textContent = tp.tasks.length;
+          rebindDel();
+        };
+      });
+    };
+    rebindDel();
+    $('#tpl-e-add-task').onclick = () => {
+      // 保留已改动的输入,再追加一空条
+      const rows = $$('#tpl-e-tasks .tpl-task-row');
+      tp.tasks = rows.map(r => ({
+        title: r.querySelector('.tpl-t-title').value,
+        stage: r.querySelector('.tpl-t-stage').value,
+        daysBeforeDeparture: parseInt(r.querySelector('.tpl-t-days').value, 10) || 0,
+        alertLevel: r.querySelector('.tpl-t-alert').value,
+      }));
+      tp.tasks.push({ title: '', stage: '出行准备', daysBeforeDeparture: 0, alertLevel: '普通' });
+      list.innerHTML = renderTasksList();
+      countEl.textContent = tp.tasks.length;
+      rebindDel();
+    };
+  }, 0);
 }
 
 /* ---------------------------------------------------------------------
@@ -3253,7 +3476,6 @@ function renderCurrentView() {
   else if (tab === 'team') renderTeamView();
   else if (tab === 'rhythm') renderRhythm();
   else if (tab === 'trip') renderTrip();
-  else if (tab === 'exhibition') renderExhibitions();
   else if (tab === 'notes') renderNotes();
   // 每次切换/渲染任何视图都同步徽章
   updateBadges();
@@ -3867,7 +4089,6 @@ function init() {
   $('#fab').onclick = () => {
     if (State.ui.tab === 'notes') openNoteModal();
     else if (State.ui.tab === 'trip') openTripModal();
-    else if (State.ui.tab === 'exhibition') openExhibitionModal();
     else openTaskModal();
   };
 

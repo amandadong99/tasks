@@ -486,6 +486,21 @@ body.reordering .person-card { transition: transform .18s ease; }
 .tpl-list { display: flex; flex-direction: column; gap: 8px; }
 .tpl-card { padding: 10px 12px; }
 .tpl-name { font-weight: 600; font-size: 16px; }
+.tpl-card { cursor: pointer; }
+.tpl-card:active { background: var(--c-primary-soft); }
+.tpl-task-row {
+  display: grid;
+  grid-template-columns: 1fr 96px 68px 90px 30px;
+  gap: 4px; align-items: center;
+  margin-bottom: 6px;
+}
+.tpl-task-row input, .tpl-task-row select {
+  padding: 6px 8px; font-size: 13px;
+  border: 0.5px solid var(--c-border); border-radius: 6px;
+  font-family: inherit; background: #fff;
+  min-width: 0; width: 100%;
+}
+.tpl-task-row .btn-icon { width: 30px; height: 30px; font-size: 16px; }
 
 /* ---- 空状态 ---- */
 .empty {
@@ -1023,7 +1038,15 @@ body.reordering .person-card { transition: transform .18s ease; }
 /* ---- 出差视图升级 ---- */
 .trip-view-toggle {
   display: flex; gap: 6px; margin: 6px 0 8px;
+  flex-wrap: wrap;
 }
+.chip.chip-fp-jump {
+  background: #FFF4D2;
+  color: #8A5A0A;
+  border-color: #F0B72E;
+  font-weight: 600;
+}
+.chip.chip-fp-jump:active { background: #FEE4A0; }
 .trip-type-legend {
   display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 12px;
 }
@@ -1168,7 +1191,15 @@ body.reordering .person-card { transition: transform .18s ease; }
   border-left: 3px solid #F0B72E;
   border-radius: 8px;
   padding: 10px 12px;
+  touch-action: none;  /* 让长按后拖动稳定 */
 }
+.fp-item.is-dragging {
+  opacity: 0.9;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.15);
+  z-index: 20; position: relative;
+  transition: none !important;
+}
+body.reordering .fp-item { transition: transform .18s ease; }
 .fp-text {
   flex: 1; font-size: 15px; line-height: 1.45;
   word-break: break-word;
