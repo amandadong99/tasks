@@ -927,13 +927,20 @@ body.reordering .person-card { transition: transform .18s ease; }
   color: rgba(0,0,0,0.65);
   display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden;
 }
+/* 正文预览:强制统一颜色,忽略笔记里的内联字色/高亮
+   这样卡片只靠背景色区分类别,标题+正文都用中性色,视觉更整齐 */
+.note-rich-preview,
+.note-rich-preview *:not(.note-img-pill):not(.muted) {
+  color: rgba(0,0,0,0.72) !important;
+  background-color: transparent !important;
+}
+.note-rich-preview .muted { color: var(--c-text-muted) !important; }
 /* 富文本预览:保留格式,但缩小标题以适应卡片 */
 .note-rich-preview h1, .note-rich-preview h2 {
   font-size: 13px !important;
   font-weight: 700 !important;
   margin: 0 !important;
   line-height: 1.4 !important;
-  color: inherit;
 }
 .note-rich-preview ul, .note-rich-preview ol {
   margin: 0; padding-left: 16px;
@@ -1155,56 +1162,109 @@ body.reordering .person-card { transition: transform .18s ease; }
 }
 .trip-cal-bar:hover { opacity: 0.85; }
 
-/* ---- 来访/模糊计划板块 ---- */
-.fuzzy-plans {
-  margin-top: 4px; margin-bottom: 16px;
-  background: var(--c-card); border: 0.5px solid var(--c-border);
-  border-radius: 12px; padding: 12px 14px;
+/* ---- 客户来访计划(团队 tab) ---- */
+.incoming-view {
+  padding: 4px 0;
 }
-.fp-head {
-  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
-  margin-bottom: 10px;
+.incoming-head { margin-bottom: 10px; }
+.incoming-title { font-size: 19px; font-weight: 600; margin-bottom: 4px; }
+.incoming-toolbar {
+  display: flex; align-items: center; gap: 10px;
+  margin-bottom: 8px; flex-wrap: wrap;
 }
-.fp-title { font-size: 15px; font-weight: 600; }
-.fp-input-row {
-  display: flex; gap: 8px; margin-bottom: 10px;
+.fp-list-color-legend {
+  display: flex; gap: 5px; flex-wrap: wrap;
+  margin-bottom: 12px;
 }
-.fp-input-row input {
-  flex: 1;
-  padding: 10px 12px;
+.fp-list-color-legend .legend-tag {
+  font-size: 12px; padding: 3px 10px; border-radius: 10px;
   border: 0.5px solid var(--c-border);
-  border-radius: 10px;
-  font-size: 15px;
-  font-family: inherit;
-  background: var(--c-bg);
+  color: var(--c-text);
 }
-.fp-input-row input:focus {
-  outline: none;
-  border-color: var(--c-primary);
-  background: #fff;
-}
-.fp-list { display: flex; flex-direction: column; gap: 6px; }
-.fp-empty { padding: 8px 0; }
+.fp-list { display: flex; flex-direction: column; gap: 8px; }
+
 .fp-item {
-  display: flex; align-items: center; gap: 8px;
-  background: #FFF9EC;
-  border-left: 3px solid #F0B72E;
-  border-radius: 8px;
-  padding: 10px 12px;
-  touch-action: none;  /* 让长按后拖动稳定 */
+  display: flex; align-items: center; gap: 10px;
+  border-left: 4px solid transparent;
+  border-radius: 10px;
+  padding: 12px 14px;
+  cursor: pointer;
+  touch-action: none;
+  transition: background .15s;
 }
+.fp-info {
+  flex: 1; min-width: 0;
+}
+.fp-date-badge {
+  display: inline-block;
+  font-size: 12px; font-weight: 600;
+  padding: 2px 10px; border-radius: 8px;
+  background: rgba(0,0,0,0.08); color: var(--c-text);
+  margin-bottom: 4px;
+}
+.fp-text {
+  font-size: 15px; line-height: 1.4;
+  word-break: break-word; color: var(--c-text);
+}
+.fp-actions {
+  display: flex; gap: 4px; flex-shrink: 0;
+}
+
+/* 颜色渐变:本月 → 下月 → 再下月 → 更远 → 已过 */
+.fp-current {
+  background: #FEE18A;
+  border-left-color: #C9871E;
+}
+.fp-current .fp-date-badge { background: rgba(201,135,30,0.25); color: #6C3E00; }
+
+.fp-next {
+  background: #FFEDB4;
+  border-left-color: #E5A94A;
+}
+.fp-next .fp-date-badge { background: rgba(229,169,74,0.25); color: #6C3E00; }
+
+.fp-far1 {
+  background: #FFF6D9;
+  border-left-color: #F0C97A;
+}
+.fp-far1 .fp-date-badge { background: rgba(240,201,122,0.25); color: #6C3E00; }
+
+.fp-far2 {
+  background: #FFFFFF;
+  border: 0.5px solid var(--c-border);
+  border-left: 4px solid #E2DED3;
+}
+
+.fp-notime {
+  background: #FFFFFF;
+  border: 0.5px dashed var(--c-border);
+  border-left: 4px dashed #E2DED3;
+}
+.fp-notime .fp-date-badge { background: #F1EFE8; color: var(--c-text-muted); }
+
+.fp-past {
+  background: #F5F5F0;
+  border-left-color: #B5B0A2;
+  opacity: 0.75;
+}
+.fp-past .fp-date-badge { background: rgba(0,0,0,0.06); color: var(--c-text-muted); }
+
+/* 图例配色同上,同 class */
+
 .fp-item.is-dragging {
-  opacity: 0.9;
-  box-shadow: 0 6px 18px rgba(0,0,0,0.15);
+  opacity: 0.95;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.18);
   z-index: 20; position: relative;
   transition: none !important;
 }
 body.reordering .fp-item { transition: transform .18s ease; }
-.fp-text {
-  flex: 1; font-size: 15px; line-height: 1.45;
-  word-break: break-word;
+
+.fp-mode-radio {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 14px !important; color: var(--c-text) !important;
+  font-weight: 500 !important;
 }
-.fp-actions { display: flex; gap: 4px; flex-shrink: 0; }
+.fp-mode-radio input[type=radio] { margin: 0; }
 .btn-icon {
   border: none; background: transparent;
   width: 30px; height: 30px; border-radius: 6px;

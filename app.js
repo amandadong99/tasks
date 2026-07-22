@@ -8,7 +8,7 @@
 'use strict';
 
 /* === 版本号(与 service-worker.js 的 CACHE_VERSION 保持一致)=== */
-const APP_VERSION = 'v5.8';
+const APP_VERSION = 'v5.9.1';
 
 /* ---------------------------------------------------------------------
  * 0. 工具函数
@@ -1714,7 +1714,6 @@ function renderTrip() {
   <div class="trip-view-toggle">
     <button class="chip ${State.ui.tripView === 'calendar' ? 'active' : ''}" data-tv="calendar">📅 日历</button>
     <button class="chip ${State.ui.tripView === 'list' ? 'active' : ''}" data-tv="list">📋 列表</button>
-    <button class="chip chip-fp-jump" data-jump="fuzzy">📝 客户来访计划</button>
   </div>
   <div class="trip-type-legend">
     ${Object.entries(TRIP_TYPES).map(([k, v]) =>
@@ -1723,14 +1722,13 @@ function renderTrip() {
   </div>`;
 
   if (State.ui.tripView === 'calendar') {
-    // 日历视图:即使没有出差也显示日历 + 模糊计划板块(空日历也能看节假日)
+    // 日历视图:即使没有出差也显示日历(空日历也能看节假日)
     html += renderTripCalendar(trips);
     if (!trips.length) {
       html += `<div class="empty" style="padding:16px;margin-top:8px">
         <div class="empty-sub">还没有确定日期的出差 · 点右上「+ 新建出差」</div>
       </div>`;
     }
-    html += renderFuzzyPlans();
   } else if (!trips.length) {
     html += `<div class="empty">
       <div class="empty-emoji">✈</div>
@@ -1742,66 +1740,10 @@ function renderTrip() {
   }
   root.innerHTML = html;
 
-  // === 模糊计划:绑定新增/删除 ===
-  const fpAdd = $('#fp-add-btn');
-  if (fpAdd) {
-    fpAdd.onclick = () => {
-      const input = $('#fp-input');
-      const text = (input.value || '').trim();
-      if (!text) { toast('请先输入计划内容'); return; }
-      State.fuzzyPlans.push({
-        id: uuid(), text, createdAt: new Date().toISOString(),
-      });
-      persistFuzzyPlans();
-      input.value = '';
-      renderTrip();
-    };
-  }
-  $$('[data-fp-del]', root).forEach(b => {
-    b.onclick = () => {
-      const id = b.dataset.fpDel;
-      const item = State.fuzzyPlans.find(x => x.id === id);
-      if (!confirm(`删除这条计划?\n\n"${item?.text || ''}"`)) return;
-      State.fuzzyPlans = State.fuzzyPlans.filter(x => x.id !== id);
-      persistFuzzyPlans();
-      renderTrip();
-    };
-  });
-  $$('[data-fp-edit]', root).forEach(b => {
-    b.onclick = () => {
-      const id = b.dataset.fpEdit;
-      const item = State.fuzzyPlans.find(x => x.id === id);
-      if (!item) return;
-      const newText = prompt('编辑来访计划', item.text);
-      if (newText == null) return;
-      const t = newText.trim();
-      if (!t) return;
-      item.text = t;
-      item.updatedAt = new Date().toISOString();
-      persistFuzzyPlans();
-      renderTrip();
-    };
-  });
-  // 长按拖动排序
-  bindFuzzyPlanReorder(root);
-
   $('[data-act="new-trip"]')?.addEventListener('click', () => openTripModal());
   $('[data-act="manage-templates"]')?.addEventListener('click', () => openTemplateManager());
   $$('.trip-view-toggle .chip').forEach(c => {
     c.onclick = () => {
-      // "客户来访计划" chip:如果不在日历模式,先切到日历模式,然后滚动到板块
-      if (c.dataset.jump === 'fuzzy') {
-        if (State.ui.tripView !== 'calendar') {
-          State.ui.tripView = 'calendar';
-          renderTrip();
-          setTimeout(() => document.querySelector('.fuzzy-plans')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
-        } else {
-          document.querySelector('.fuzzy-plans')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-          // 顺便让输入框聚焦
-          setTimeout(() => document.querySelector('#fp-input')?.focus(), 260);
-        }
-        return;
-      }
       State.ui.tripView = c.dataset.tv;
       renderTrip();
     };
@@ -1926,39 +1868,254 @@ function _endFpDrag() {
   toast('顺序已保存');
 }
 
-/** 模糊来访计划板块:输入框 + 已有计划列表 */
-function renderFuzzyPlans() {
-  // 排序:优先手动 sortOrder,其次按创建时间倒序
+/* ---- 客户来访计划:结构化时间字段 ---- */
+
+/** 计算一条计划的"实际日期"(用于排序/着色) */
+function fpEffectiveDate(fp) {
+  if (fp.dateExact) return fp.dateExact;   // 具体日期优先
+  if (fp.year && fp.month) {
+    const day = fp.dayPart === '上旬' ? 5 : fp.dayPart === '下旬' ? 25 : 15;
+    return `${fp.year}-${String(fp.month).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+  }
+  return null;
+}
+
+/** 距离今天几个月 (0=本月, 1=下月, -1=上月已过) */
+function fpMonthDiff(fp) {
+  const eff = fpEffectiveDate(fp);
+  if (!eff) return 999;
+  const [y, m] = eff.split('-').map(Number);
+  const now = new Date();
+  return (y - now.getFullYear()) * 12 + (m - (now.getMonth() + 1));
+}
+
+/** 根据月份距离决定卡片背景色渐变 */
+function fpGradientClass(fp) {
+  const diff = fpMonthDiff(fp);
+  if (diff < 0) return 'fp-past';       // 已过时间 灰
+  if (diff === 0) return 'fp-current';  // 本月 深黄
+  if (diff === 1) return 'fp-next';     // 下月 中黄
+  if (diff === 2) return 'fp-far1';     // 再下月 浅黄
+  if (diff === 999) return 'fp-notime'; // 无时间 白+边框
+  return 'fp-far2';                     // 更远 白
+}
+
+/** 计划的可读时间标签 */
+function fpDateLabel(fp) {
+  if (fp.dateExact) return fmtDate(fp.dateExact);
+  if (fp.year && fp.month) return `${fp.year} 年 ${fp.month} 月${fp.dayPart||''}`;
+  return '无时间';
+}
+
+/** 从旧文字里推断年月旬(仅当无结构化字段时) */
+function parseFuzzyTimeFromText(txt) {
+  if (!txt) return null;
+  const m = txt.match(/(\d{1,2})\s*月([初上中下底])?旬?/);
+  if (!m) return null;
+  const month = parseInt(m[1]);
+  const key = m[2] || '';
+  const dayPart = ({ '初':'上旬','上':'上旬','中':'中旬','下':'下旬','底':'下旬' })[key] || '中旬';
+  const now = new Date();
+  let year = now.getFullYear();
+  if (month < now.getMonth() + 1) year++;  // 已过的月份 → 明年
+  return { year, month, dayPart };
+}
+
+/** 客户来访(团队 tab)视图:代替原来放在出差页的模糊计划板块 */
+function renderIncomingView() {
+  const root = $('#team-content');
+
+  // 一次性给旧数据补上 year/month/dayPart(有则跳过)
+  let migrated = 0;
+  for (const fp of State.fuzzyPlans) {
+    if (!fp.dateExact && !(fp.year && fp.month)) {
+      const parsed = parseFuzzyTimeFromText(fp.text);
+      if (parsed) { Object.assign(fp, parsed); migrated++; }
+    }
+  }
+  if (migrated) { persistFuzzyPlans(); console.info(`[fp migrate] 从文字解析 ${migrated} 条时间`); }
+
+  // 排序:手动 sortOrder 优先 → 有效日期由近到远 → 无时间垫底
   const list = [...(State.fuzzyPlans || [])].sort((a, b) => {
     const ao = a.sortOrder, bo = b.sortOrder;
     if (ao != null && bo != null) return ao - bo;
     if (ao != null) return -1;
     if (bo != null) return 1;
+    const ad = fpEffectiveDate(a), bd = fpEffectiveDate(b);
+    if (ad && bd) return ad.localeCompare(bd);
+    if (ad) return -1;
+    if (bd) return 1;
     return (b.createdAt || '').localeCompare(a.createdAt || '');
   });
-  let itemsHtml = '';
+
+  let html = `<div class="incoming-view">
+    <div class="incoming-head">
+      <div class="incoming-title">📝 客户来访计划</div>
+      <div class="muted small">日期未定的先记这里,一旦确定就 + 新建出差</div>
+    </div>
+    <div class="incoming-toolbar">
+      <button class="btn btn-primary" id="fp-new-btn">+ 添加计划</button>
+      <span class="muted small">共 ${list.length} 条 · 按时间由近到远</span>
+    </div>
+    <div class="fp-list-color-legend">
+      <span class="legend-tag fp-current">本月</span>
+      <span class="legend-tag fp-next">下月</span>
+      <span class="legend-tag fp-far1">再下月</span>
+      <span class="legend-tag fp-far2">更远</span>
+    </div>`;
+
   if (!list.length) {
-    itemsHtml = `<div class="fp-empty muted small">还没有模糊计划 — 客户何时来中国还没定日期的都写这里</div>`;
+    html += `<div class="empty" style="padding:24px 12px">
+      <div class="empty-emoji">📝</div>
+      <div class="empty-title">还没有来访计划</div>
+      <div class="empty-sub">点「+ 添加计划」录入年月旬或具体日期</div>
+    </div>`;
   } else {
-    itemsHtml = list.map(fp => `<div class="fp-item" data-fp-id="${fp.id}">
-      <div class="fp-text">${escapeHtml(fp.text)}</div>
-      <div class="fp-actions">
-        <button class="btn-icon" data-fp-edit="${fp.id}" title="编辑">✎</button>
-        <button class="btn-icon danger" data-fp-del="${fp.id}" title="删除">×</button>
-      </div>
-    </div>`).join('');
+    html += `<div class="fp-list">
+      ${list.map(fp => `<div class="fp-item ${fpGradientClass(fp)}" data-fp-id="${fp.id}">
+        <div class="fp-info">
+          <div class="fp-date-badge">${escapeHtml(fpDateLabel(fp))}</div>
+          <div class="fp-text">${escapeHtml(fp.text || '')}</div>
+        </div>
+        <div class="fp-actions">
+          <button class="btn-icon" data-fp-edit="${fp.id}" title="编辑">✎</button>
+          <button class="btn-icon danger" data-fp-del="${fp.id}" title="删除">×</button>
+        </div>
+      </div>`).join('')}
+    </div>`;
   }
-  return `<div class="fuzzy-plans">
-    <div class="fp-head">
-      <span class="fp-title">📝 来访/模糊计划</span>
-      <span class="muted small">日期未定的先记这里,一旦确定就 + 新建出差</span>
-    </div>
-    <div class="fp-input-row">
-      <input id="fp-input" type="text" placeholder="例:XXX 客户计划 10 月来中国 3 天" />
-      <button id="fp-add-btn" class="btn btn-primary btn-small">添加</button>
-    </div>
-    <div class="fp-list">${itemsHtml}</div>
-  </div>`;
+  html += `</div>`;
+  root.innerHTML = html;
+
+  $('#fp-new-btn')?.addEventListener('click', () => openFuzzyPlanModal());
+  $$('[data-fp-edit]', root).forEach(b => {
+    b.onclick = (e) => { e.stopPropagation(); openFuzzyPlanModal(b.dataset.fpEdit); };
+  });
+  $$('[data-fp-del]', root).forEach(b => {
+    b.onclick = (e) => {
+      e.stopPropagation();
+      const id = b.dataset.fpDel;
+      const item = State.fuzzyPlans.find(x => x.id === id);
+      if (!confirm(`删除这条计划?\n\n"${item?.text || ''}"`)) return;
+      State.fuzzyPlans = State.fuzzyPlans.filter(x => x.id !== id);
+      persistFuzzyPlans();
+      renderIncomingView();
+    };
+  });
+  // 点整卡也进编辑
+  $$('.fp-item', root).forEach(el => {
+    el.addEventListener('click', (e) => {
+      if (e.target.closest('button')) return;
+      const id = el.dataset.fpId;
+      if (id) openFuzzyPlanModal(id);
+    });
+  });
+  bindFuzzyPlanReorder(root);
+}
+
+/** 新增/编辑弹窗:模糊时间 (年月旬) 或 具体日期 */
+function openFuzzyPlanModal(fpId) {
+  const isNew = !fpId;
+  const now = new Date();
+  const fp = isNew
+    ? { id: uuid(), text: '', year: now.getFullYear(), month: now.getMonth()+2, dayPart: '中旬', dateExact: '' }
+    : { ...State.fuzzyPlans.find(x => x.id === fpId) };
+  if (!fp) return;
+  fp.year = fp.year || now.getFullYear();
+  fp.month = fp.month || now.getMonth()+1;
+  fp.dayPart = fp.dayPart || '中旬';
+
+  const useMode = fp.dateExact ? 'exact' : 'fuzzy';
+  const yearRange = [now.getFullYear(), now.getFullYear()+1, now.getFullYear()+2];
+
+  openModal({
+    title: isNew ? '新增来访计划' : '编辑来访计划',
+    body: `
+      <label>客户 & 计划描述
+        <input id="fp-m-text" value="${escapeHtml(fp.text)}" placeholder="如:ABC 客户 来上海考察 3 天" />
+      </label>
+
+      <div class="row" style="gap:16px;margin-bottom:10px">
+        <label class="fp-mode-radio"><input type="radio" name="fp-mode" value="fuzzy" ${useMode==='fuzzy'?'checked':''}> 模糊时间</label>
+        <label class="fp-mode-radio"><input type="radio" name="fp-mode" value="exact" ${useMode==='exact'?'checked':''}> 具体日期</label>
+      </div>
+
+      <div id="fp-m-fuzzy" ${useMode==='exact'?'hidden':''}>
+        <div class="row">
+          <label class="flex1">年份
+            <select id="fp-m-year">
+              ${yearRange.map(y => `<option value="${y}" ${fp.year==y?'selected':''}>${y} 年</option>`).join('')}
+            </select>
+          </label>
+          <label class="flex1">月份
+            <select id="fp-m-month">
+              ${Array.from({length:12},(_,i)=>i+1).map(m => `<option value="${m}" ${fp.month==m?'selected':''}>${m} 月</option>`).join('')}
+            </select>
+          </label>
+          <label class="flex1">旬
+            <select id="fp-m-part">
+              ${['上旬','中旬','下旬'].map(p => `<option value="${p}" ${fp.dayPart===p?'selected':''}>${p}</option>`).join('')}
+            </select>
+          </label>
+        </div>
+      </div>
+
+      <div id="fp-m-exact" ${useMode==='fuzzy'?'hidden':''}>
+        <label>具体日期
+          <input type="date" id="fp-m-date" value="${escapeHtml(fp.dateExact||'')}" />
+        </label>
+      </div>
+    `,
+    actions: [
+      { label: '取消', onClick: closeModal },
+      ...(isNew ? [] : [{ label: '删除', danger: true, onClick: () => {
+        if (!confirm('删除该计划?')) return;
+        State.fuzzyPlans = State.fuzzyPlans.filter(x => x.id !== fpId);
+        persistFuzzyPlans();
+        closeModal();
+        renderIncomingView();
+        toast('已删除');
+      }}]),
+      { label: '保存', primary: true, onClick: () => {
+        const text = $('#fp-m-text').value.trim();
+        if (!text) { toast('请填客户/计划描述'); return; }
+        const mode = document.querySelector('input[name=fp-mode]:checked')?.value || 'fuzzy';
+        const payload = {
+          ...fp, text,
+          updatedAt: new Date().toISOString(),
+          createdAt: fp.createdAt || new Date().toISOString(),
+        };
+        if (mode === 'exact') {
+          const d = $('#fp-m-date').value;
+          if (!d) { toast('请选择具体日期'); return; }
+          payload.dateExact = d;
+          payload.year = null; payload.month = null; payload.dayPart = null;
+        } else {
+          payload.year = parseInt($('#fp-m-year').value, 10);
+          payload.month = parseInt($('#fp-m-month').value, 10);
+          payload.dayPart = $('#fp-m-part').value;
+          payload.dateExact = '';
+        }
+        if (isNew) State.fuzzyPlans.push(payload);
+        else State.fuzzyPlans = State.fuzzyPlans.map(x => x.id === fpId ? payload : x);
+        persistFuzzyPlans();
+        closeModal();
+        renderIncomingView();
+        toast(isNew ? '已添加' : '已保存');
+      }},
+    ],
+  });
+
+  // 单选切换显隐
+  setTimeout(() => {
+    document.querySelectorAll('input[name=fp-mode]').forEach(r => {
+      r.onchange = () => {
+        const v = r.value;
+        document.getElementById('fp-m-fuzzy').hidden = v !== 'fuzzy';
+        document.getElementById('fp-m-exact').hidden = v !== 'exact';
+      };
+    });
+  }, 0);
 }
 
 /* ============================================================
@@ -3473,7 +3630,7 @@ function renderCurrentView() {
   const tab = State.ui.tab;
   if (tab === 'today') renderToday();
   else if (tab === 'customer') renderCustomerView();
-  else if (tab === 'team') renderTeamView();
+  else if (tab === 'team') renderIncomingView();  // 团队 tab → 客户来访计划
   else if (tab === 'rhythm') renderRhythm();
   else if (tab === 'trip') renderTrip();
   else if (tab === 'notes') renderNotes();
@@ -4089,6 +4246,7 @@ function init() {
   $('#fab').onclick = () => {
     if (State.ui.tab === 'notes') openNoteModal();
     else if (State.ui.tab === 'trip') openTripModal();
+    else if (State.ui.tab === 'team') openFuzzyPlanModal();  // 客户来访 tab
     else openTaskModal();
   };
 
