@@ -8,7 +8,7 @@
 'use strict';
 
 /* === 版本号(与 service-worker.js 的 CACHE_VERSION 保持一致)=== */
-const APP_VERSION = 'v5.9.1';
+const APP_VERSION = 'v5.9.2';
 
 /* ---------------------------------------------------------------------
  * 0. 工具函数
@@ -1455,12 +1455,13 @@ function noteCard(n) {
   // 富文本预览:保留所有格式,仅把图片替换成🖼避免预览过大
   const previewHTML = (n.content || '').replace(/<img[^>]*>/gi, '<span class="note-img-pill">🖼</span>');
   const isEmpty = !noteContentPreview(n.content).trim();
-  return `<div class="note-card" data-nid="${n.id}" style="background:${cat.bg}">
+  // 白底卡 + 类别色左边条 + 类别色标题,视觉更清爽
+  return `<div class="note-card" data-nid="${n.id}" style="border-left:4px solid ${cat.accent}">
     <div class="note-head">
       <span class="note-date" style="color:${cat.accent}">📅 ${date} · ${cat.name}</span>
       ${n.pinned ? '<span class="note-pin">📌</span>' : ''}
     </div>
-    <div class="note-title">${escapeHtml(n.title || '(无标题)')}</div>
+    <div class="note-title" style="color:${cat.accent}">${escapeHtml(n.title || '(无标题)')}</div>
     <div class="note-preview note-rich-preview">${isEmpty ? '<span class="muted">空笔记</span>' : previewHTML}</div>
   </div>`;
 }
@@ -1825,6 +1826,7 @@ function _startFpDrag(item, e) {
   try { item.setPointerCapture(e.pointerId); } catch {}
   item.classList.add('is-dragging');
   document.body.classList.add('reordering');
+  item.style.touchAction = 'none';  // 拖动时才禁用触摸手势(避免滚动被永久卡住)
   if (navigator.vibrate) { try { navigator.vibrate(25); } catch {} }
   _fpDrag = { item, pointerId: e.pointerId, refY: e.clientY };
 }
@@ -1857,6 +1859,7 @@ function _endFpDrag() {
   try { s.item.releasePointerCapture(s.pointerId); } catch {}
   s.item.classList.remove('is-dragging');
   s.item.style.transform = '';
+  s.item.style.touchAction = '';  // 恢复默认(pan-y 从 CSS 生效)
   document.body.classList.remove('reordering');
   const parent = s.item.parentElement;
   Array.from(parent.querySelectorAll('.fp-item')).forEach((el, i) => {

@@ -904,8 +904,9 @@ body.reordering .person-card { transition: transform .18s ease; }
   display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
 }
 .note-card {
+  background: #FFFFFF;
   border-radius: 12px; padding: 12px 14px 14px;
-  border: 0.5px solid rgba(0,0,0,0.06);
+  border: 0.5px solid var(--c-border);
   cursor: pointer; transition: transform .15s;
   min-height: 130px;
   display: flex; flex-direction: column; gap: 6px;
@@ -1181,6 +1182,10 @@ body.reordering .person-card { transition: transform .18s ease; }
   border: 0.5px solid var(--c-border);
   color: var(--c-text);
 }
+.fp-list-color-legend .legend-tag.fp-current,
+.fp-list-color-legend .legend-tag.fp-next,
+.fp-list-color-legend .legend-tag.fp-far1,
+.fp-list-color-legend .legend-tag.fp-far2 { border-left-width: 3px; }
 .fp-list { display: flex; flex-direction: column; gap: 8px; }
 
 .fp-item {
@@ -1189,7 +1194,7 @@ body.reordering .person-card { transition: transform .18s ease; }
   border-radius: 10px;
   padding: 12px 14px;
   cursor: pointer;
-  touch-action: none;
+  touch-action: pan-y;   /* 允许纵向滚动;长按进入拖动时 JS 会临时禁用 */
   transition: background .15s;
 }
 .fp-info {
@@ -1210,35 +1215,36 @@ body.reordering .person-card { transition: transform .18s ease; }
   display: flex; gap: 4px; flex-shrink: 0;
 }
 
-/* 颜色渐变:本月 → 下月 → 再下月 → 更远 → 已过 */
+/* 颜色渐变:本月 → 下月 → 再下月 → 更远 → 已过(蓝色系,由深到浅) */
 .fp-current {
-  background: #FEE18A;
-  border-left-color: #C9871E;
+  background: #B4D8FF;
+  border-left-color: #1C4A99;
 }
-.fp-current .fp-date-badge { background: rgba(201,135,30,0.25); color: #6C3E00; }
+.fp-current .fp-date-badge { background: rgba(28,74,153,0.25); color: #0F2E6B; }
 
 .fp-next {
-  background: #FFEDB4;
-  border-left-color: #E5A94A;
+  background: #D3E5FF;
+  border-left-color: #4B7BCC;
 }
-.fp-next .fp-date-badge { background: rgba(229,169,74,0.25); color: #6C3E00; }
+.fp-next .fp-date-badge { background: rgba(75,123,204,0.22); color: #163D80; }
 
 .fp-far1 {
-  background: #FFF6D9;
-  border-left-color: #F0C97A;
+  background: #EAF2FF;
+  border-left-color: #8AAEE0;
 }
-.fp-far1 .fp-date-badge { background: rgba(240,201,122,0.25); color: #6C3E00; }
+.fp-far1 .fp-date-badge { background: rgba(138,174,224,0.30); color: #2454A8; }
 
 .fp-far2 {
   background: #FFFFFF;
   border: 0.5px solid var(--c-border);
-  border-left: 4px solid #E2DED3;
+  border-left: 4px solid #C9DEFF;
 }
+.fp-far2 .fp-date-badge { background: #EAF2FF; color: #2454A8; }
 
 .fp-notime {
   background: #FFFFFF;
   border: 0.5px dashed var(--c-border);
-  border-left: 4px dashed #E2DED3;
+  border-left: 4px dashed #C9DEFF;
 }
 .fp-notime .fp-date-badge { background: #F1EFE8; color: var(--c-text-muted); }
 
