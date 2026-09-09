@@ -8,7 +8,7 @@
 'use strict';
 
 /* === 版本号(与 service-worker.js 的 CACHE_VERSION 保持一致)=== */
-const APP_VERSION = 'v5.9.2';
+const APP_VERSION = 'v5.9.3';
 
 /* ---------------------------------------------------------------------
  * 0. 工具函数
@@ -60,6 +60,7 @@ const KEY = {
   templates: 'amanda.tripTemplates',
   fuzzyPlans: 'amanda.fuzzyPlans',
   exhibitions: 'amanda.exhibitions',
+  salespeople: 'amanda.salespeople',
   notes: 'amanda.notes',
   meta: 'amanda.meta',
   docKey: 'amanda.docKey',
@@ -383,8 +384,9 @@ const State = {
   persons: [],
   trips: [],
   templates: [],
-  fuzzyPlans: [],   // 客户模糊来访计划 { id, text, createdAt }
+  fuzzyPlans: [],   // 客户模糊来访计划 { id, text, createdAt, salesperson }
   exhibitions: [],  // 展会 { id, name, dateStart, dateEnd, country, city, frequency, agent, url, notes }
+  salespeople: [],  // 业务员 { id, name }
   notes: [],
   ui: { tab: 'today', peopleFilter: 'all', rhythmTab: 'frequency',
         notesFilter: 'all', tripView: 'calendar',
@@ -415,7 +417,14 @@ function initData() {
     State.trips = Store.load(KEY.trips, []);
     State.fuzzyPlans = Store.load(KEY.fuzzyPlans, []);
     State.exhibitions = Store.load(KEY.exhibitions, []);
+    State.salespeople = Store.load(KEY.salespeople, []);
     State.notes = Store.load(KEY.notes, []);
+
+    // v5.9.3 首次:业务员种子 Amanda/Susan/Comma/Judy/Mia
+    if (!State.salespeople.length) {
+      State.salespeople = ['Amanda','Susan','Comma','Judy','Mia'].map(n => ({ id: uuid(), name: n }));
+      Store.save(KEY.salespeople, State.salespeople);
+    }
 
     // v5.7 迁移:行业→客户 · 个人→团队(用户不再需要这两类)
     let migrated = 0;
@@ -510,10 +519,10 @@ function migrateTripTemplates() {
 }
 
 /* 持久化 + Firebase 同步 */
-const _syncSnapshot = { tasks: null, persons: null, trips: null, templates: null, notes: null, fuzzyPlans: null, exhibitions: null };
+const _syncSnapshot = { tasks: null, persons: null, trips: null, templates: null, notes: null, fuzzyPlans: null, exhibitions: null, salespeople: null };
 
 function captureSyncSnapshot() {
-  for (const k of ['tasks', 'persons', 'trips', 'templates', 'notes', 'fuzzyPlans', 'exhibitions']) {
+  for (const k of ['tasks', 'persons', 'trips', 'templates', 'notes', 'fuzzyPlans', 'exhibitions', 'salespeople']) {
     _syncSnapshot[k] = JSON.stringify(State[k]);
   }
 }
@@ -551,6 +560,7 @@ function persistTemplates() { Store.save(KEY.templates, State.templates); _syncT
 function persistNotes() { Store.save(KEY.notes, State.notes); _syncToFirebase('notes'); }
 function persistFuzzyPlans() { Store.save(KEY.fuzzyPlans, State.fuzzyPlans); _syncToFirebase('fuzzyPlans'); }
 function persistExhibitions() { Store.save(KEY.exhibitions, State.exhibitions); _syncToFirebase('exhibitions'); }
+function persistSalespeople() { Store.save(KEY.salespeople, State.salespeople); _syncToFirebase('salespeople'); }
 
 /* ---------------------------------------------------------------------
  * 4. 业务逻辑工具
@@ -1977,7 +1987,10 @@ function renderIncomingView() {
     html += `<div class="fp-list">
       ${list.map(fp => `<div class="fp-item ${fpGradientClass(fp)}" data-fp-id="${fp.id}">
         <div class="fp-info">
-          <div class="fp-date-badge">${escapeHtml(fpDateLabel(fp))}</div>
+          <div class="fp-badges">
+            <span class="fp-date-badge">${escapeHtml(fpDateLabel(fp))}</span>
+            ${fp.salesperson ? `<span class="fp-sales-badge">👤 ${escapeHtml(fp.salesperson)}</span>` : ''}
+          </div>
           <div class="fp-text">${escapeHtml(fp.text || '')}</div>
         </div>
         <div class="fp-actions">
@@ -2031,11 +2044,22 @@ function openFuzzyPlanModal(fpId) {
   const useMode = fp.dateExact ? 'exact' : 'fuzzy';
   const yearRange = [now.getFullYear(), now.getFullYear()+1, now.getFullYear()+2];
 
+  const salespeople = State.salespeople || [];
   openModal({
     title: isNew ? '新增来访计划' : '编辑来访计划',
     body: `
       <label>客户 & 计划描述
         <input id="fp-m-text" value="${escapeHtml(fp.text)}" placeholder="如:ABC 客户 来上海考察 3 天" />
+      </label>
+
+      <label>业务员
+        <div class="row" style="gap:6px">
+          <select id="fp-m-sales" style="flex:1">
+            <option value="">(未指派)</option>
+            ${salespeople.map(sp => `<option value="${escapeHtml(sp.name)}" ${fp.salesperson===sp.name?'selected':''}>${escapeHtml(sp.name)}</option>`).join('')}
+          </select>
+          <button type="button" class="btn btn-small" id="fp-m-add-sales">+ 新增业务员</button>
+        </div>
       </label>
 
       <div class="row" style="gap:16px;margin-bottom:10px">
@@ -2085,6 +2109,7 @@ function openFuzzyPlanModal(fpId) {
         const mode = document.querySelector('input[name=fp-mode]:checked')?.value || 'fuzzy';
         const payload = {
           ...fp, text,
+          salesperson: $('#fp-m-sales').value || '',
           updatedAt: new Date().toISOString(),
           createdAt: fp.createdAt || new Date().toISOString(),
         };
@@ -2109,7 +2134,7 @@ function openFuzzyPlanModal(fpId) {
     ],
   });
 
-  // 单选切换显隐
+  // 单选切换显隐 + 新增业务员按钮
   setTimeout(() => {
     document.querySelectorAll('input[name=fp-mode]').forEach(r => {
       r.onchange = () => {
@@ -2118,6 +2143,28 @@ function openFuzzyPlanModal(fpId) {
         document.getElementById('fp-m-exact').hidden = v !== 'exact';
       };
     });
+    document.getElementById('fp-m-add-sales').onclick = () => {
+      const name = prompt('新增业务员姓名');
+      if (!name) return;
+      const t = name.trim();
+      if (!t) return;
+      // 去重
+      if (State.salespeople.some(s => s.name === t)) {
+        toast('已存在该业务员');
+        // 顺便选中
+        const sel = document.getElementById('fp-m-sales');
+        sel.value = t;
+        return;
+      }
+      State.salespeople.push({ id: uuid(), name: t });
+      persistSalespeople();
+      // 追加到下拉并选中
+      const sel = document.getElementById('fp-m-sales');
+      const opt = document.createElement('option');
+      opt.value = t; opt.textContent = t; opt.selected = true;
+      sel.appendChild(opt);
+      toast('已添加 ' + t);
+    };
   }, 0);
 }
 
@@ -2636,7 +2683,7 @@ function openTripModal(existing) {
       <label>目的地<input id="trip-dest" value="${escapeHtml(t.destination)}" placeholder="国家/城市"></label>
       <div class="row">
         <label class="flex1">出发日期<input id="trip-dep" type="date" value="${t.departureDate}"></label>
-        <label class="flex1">返程日期<input id="trip-ret" type="date" value="${t.returnDate}"></label>
+        <label class="flex1">返程日期<input id="trip-ret" type="date" value="${t.returnDate}" ${t.departureDate ? `min="${t.departureDate}"` : ''}></label>
       </div>
       <div class="row">
         <label class="flex1">出差类型<select id="trip-type">${typeOptions}</select></label>
@@ -2677,6 +2724,20 @@ function openTripModal(existing) {
       }},
     ],
   });
+
+  // 出发日期选定后:返程日期只能选当天或之后,且日历自动定位到出发日期所在月份
+  const depEl = $('#trip-dep');
+  const retEl = $('#trip-ret');
+  if (depEl && retEl) {
+    const syncReturn = () => {
+      const dep = depEl.value;
+      if (!dep) { retEl.removeAttribute('min'); return; }
+      retEl.min = dep;
+      if (!retEl.value || retEl.value < dep) retEl.value = dep;
+    };
+    depEl.addEventListener('change', syncReturn);
+    depEl.addEventListener('input', syncReturn);
+  }
 }
 
 function deriveTripTasks(trip) {

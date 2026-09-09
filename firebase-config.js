@@ -55,6 +55,7 @@ window.AmandaFirebase = {
     trips: 'trips', templates: 'templates',
     notes: 'notes', fuzzyPlans: 'fuzzyPlans',
     exhibitions: 'exhibitions',
+    salespeople: 'salespeople',
   },
 
   /* ============= 加密层(Web Crypto API)============= */

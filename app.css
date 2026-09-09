@@ -1200,12 +1200,19 @@ body.reordering .person-card { transition: transform .18s ease; }
 .fp-info {
   flex: 1; min-width: 0;
 }
-.fp-date-badge {
+.fp-badges {
+  display: flex; flex-wrap: wrap; gap: 5px;
+  margin-bottom: 4px;
+}
+.fp-date-badge, .fp-sales-badge {
   display: inline-block;
   font-size: 12px; font-weight: 600;
   padding: 2px 10px; border-radius: 8px;
-  background: rgba(0,0,0,0.08); color: var(--c-text);
-  margin-bottom: 4px;
+}
+.fp-date-badge { background: rgba(0,0,0,0.08); color: var(--c-text); }
+.fp-sales-badge {
+  background: rgba(28,74,153,0.12);
+  color: #1C4A99;
 }
 .fp-text {
   font-size: 15px; line-height: 1.4;
