@@ -8,7 +8,7 @@
 'use strict';
 
 /* === 版本号(与 service-worker.js 的 CACHE_VERSION 保持一致)=== */
-const APP_VERSION = 'v5.9.3';
+const APP_VERSION = 'v5.9.5';
 
 /* ---------------------------------------------------------------------
  * 0. 工具函数
@@ -2725,18 +2725,27 @@ function openTripModal(existing) {
     ],
   });
 
-  // 出发日期选定后:返程日期只能选当天或之后,且日历自动定位到出发日期所在月份
+  // 出发日期选定后:返程日期只能选当天或之后,且日历定位到出发日期所在月份
   const depEl = $('#trip-dep');
   const retEl = $('#trip-ret');
   if (depEl && retEl) {
-    const syncReturn = () => {
+    const anchorReturn = () => {
       const dep = depEl.value;
       if (!dep) { retEl.removeAttribute('min'); return; }
-      retEl.min = dep;
-      if (!retEl.value || retEl.value < dep) retEl.value = dep;
+      retEl.min = dep;                                   // 只能往后选
+      if (!retEl.value || retEl.value < dep) retEl.value = dep;  // 日历落在出发月份
     };
-    depEl.addEventListener('change', syncReturn);
-    depEl.addEventListener('input', syncReturn);
+    ['change', 'input', 'blur'].forEach(ev => depEl.addEventListener(ev, anchorReturn));
+    // iOS 兜底:点开返程日期的那一刻再对齐一次,避免 change 未触发时日历跳到今天
+    ['pointerdown', 'focus', 'click'].forEach(ev => retEl.addEventListener(ev, anchorReturn));
+    // 手动选了早于出发日期的值 → 纠正回出发日期
+    retEl.addEventListener('change', () => {
+      const dep = depEl.value;
+      if (dep && retEl.value && retEl.value < dep) {
+        retEl.value = dep;
+        toast('返程日期不能早于出发日期');
+      }
+    });
   }
 }
 
