@@ -8,7 +8,7 @@
 'use strict';
 
 /* === 版本号(与 service-worker.js 的 CACHE_VERSION 保持一致)=== */
-const APP_VERSION = 'v5.9.5';
+const APP_VERSION = 'v5.10.0';
 
 /* ---------------------------------------------------------------------
  * 0. 工具函数
@@ -61,6 +61,7 @@ const KEY = {
   fuzzyPlans: 'amanda.fuzzyPlans',
   exhibitions: 'amanda.exhibitions',
   salespeople: 'amanda.salespeople',
+  visas: 'amanda.visas',
   notes: 'amanda.notes',
   meta: 'amanda.meta',
   docKey: 'amanda.docKey',
@@ -387,6 +388,7 @@ const State = {
   fuzzyPlans: [],   // 客户模糊来访计划 { id, text, createdAt, salesperson }
   exhibitions: [],  // 展会 { id, name, dateStart, dateEnd, country, city, frequency, agent, url, notes }
   salespeople: [],  // 业务员 { id, name }
+  visas: [],        // 证件 { id, docType:'签证'|'护照', country, visaType, expiryDate, notes, relatedTaskIds }
   notes: [],
   ui: { tab: 'today', peopleFilter: 'all', rhythmTab: 'frequency',
         notesFilter: 'all', tripView: 'calendar',
@@ -404,11 +406,13 @@ function initData() {
     State.templates = seedTemplates();
     State.trips = [];
     State.notes = [];
+    State.visas = [];
     Store.save(KEY.persons, State.persons);
     Store.save(KEY.tasks, State.tasks);
     Store.save(KEY.templates, State.templates);
     Store.save(KEY.trips, State.trips);
     Store.save(KEY.notes, State.notes);
+    Store.save(KEY.visas, State.visas);
     Store.save(KEY.meta, { seeded: true, seededAt: new Date().toISOString(), version: '1.0' });
   } else {
     State.persons = Store.load(KEY.persons, []);
@@ -418,6 +422,7 @@ function initData() {
     State.fuzzyPlans = Store.load(KEY.fuzzyPlans, []);
     State.exhibitions = Store.load(KEY.exhibitions, []);
     State.salespeople = Store.load(KEY.salespeople, []);
+    State.visas = Store.load(KEY.visas, []);
     State.notes = Store.load(KEY.notes, []);
 
     // v5.9.3 首次:业务员种子 Amanda/Susan/Comma/Judy/Mia
@@ -561,6 +566,7 @@ function persistNotes() { Store.save(KEY.notes, State.notes); _syncToFirebase('n
 function persistFuzzyPlans() { Store.save(KEY.fuzzyPlans, State.fuzzyPlans); _syncToFirebase('fuzzyPlans'); }
 function persistExhibitions() { Store.save(KEY.exhibitions, State.exhibitions); _syncToFirebase('exhibitions'); }
 function persistSalespeople() { Store.save(KEY.salespeople, State.salespeople); _syncToFirebase('salespeople'); }
+function persistVisas() { Store.save(KEY.visas, State.visas); _syncToFirebase('visas'); }
 
 /* ---------------------------------------------------------------------
  * 4. 业务逻辑工具
@@ -1718,7 +1724,7 @@ function renderTrip() {
   });
 
   // 顶部工具条 + 视图切换
-  let html = `<div class="trip-toolbar">
+  let html = renderVisaBar() + `<div class="trip-toolbar">
     <button class="btn btn-primary" data-act="new-trip">+ 新建出差</button>
     <button class="btn btn-ghost btn-small" data-act="manage-templates">管理模板</button>
   </div>
@@ -1751,6 +1757,10 @@ function renderTrip() {
   }
   root.innerHTML = html;
 
+  $('[data-act="new-visa"]')?.addEventListener('click', () => openVisaModal());
+  $$('.visa-card').forEach(c => {
+    c.onclick = () => openVisaModal(State.visas.find(v => v.id === c.dataset.vid));
+  });
   $('[data-act="new-trip"]')?.addEventListener('click', () => openTripModal());
   $('[data-act="manage-templates"]')?.addEventListener('click', () => openTemplateManager());
   $$('.trip-view-toggle .chip').forEach(c => {
@@ -2747,6 +2757,154 @@ function openTripModal(existing) {
       }
     });
   }
+}
+
+/* ---------------------------------------------------------------------
+ * 9b. 证件(签证 / 护照)有效期管理
+ *   到期前 90 / 60 / 30 天各派生一条"重新办理"任务
+ * ------------------------------------------------------------------ */
+const VISA_NODES = [
+  { days: 90, alertLevel: '普通',     priority: 'P2' },
+  { days: 60, alertLevel: '琥珀提醒', priority: 'P1' },
+  { days: 30, alertLevel: '红色警告', priority: 'P0' },
+];
+
+function visaStatus(v) {
+  const left = daysBetween(todayISO(), v.expiryDate);
+  if (left < 0)   return { left, color: '#b91c1c', soft: '#fee2e2', label: `已过期 ${-left} 天` };
+  if (left <= 30) return { left, color: '#dc2626', soft: '#fee2e2', label: `剩 ${left} 天` };
+  if (left <= 60) return { left, color: '#b45309', soft: '#fef3c7', label: `剩 ${left} 天` };
+  if (left <= 90) return { left, color: '#a16207', soft: '#fefce8', label: `剩 ${left} 天` };
+  return { left, color: '#047857', soft: '#ecfdf5', label: `剩 ${left} 天` };
+}
+
+function visaName(v) {
+  if (v.docType === '护照') return `护照${v.country ? ' · ' + v.country : ''}`;
+  return `${v.country || '未填国家'} 签证`;
+}
+
+function visaCard(v) {
+  const s = visaStatus(v);
+  const sub = [v.visaType, v.notes].filter(Boolean).join(' · ');
+  return `<div class="card visa-card" data-vid="${v.id}" style="border-left:4px solid ${s.color}">
+    <div class="visa-card-main">
+      <div class="visa-name">${escapeHtml(visaName(v))}</div>
+      ${sub ? `<div class="muted small">${escapeHtml(sub)}</div>` : ''}
+      <div class="muted small">有效期至 ${v.expiryDate}</div>
+    </div>
+    <span class="visa-badge" style="background:${s.soft};color:${s.color}">${s.label}</span>
+  </div>`;
+}
+
+function renderVisaBar() {
+  const visas = [...State.visas].sort((a, b) => (a.expiryDate || '').localeCompare(b.expiryDate || ''));
+  return `<div class="visa-bar">
+    <div class="visa-head">
+      <span class="visa-title">🛂 证件有效期</span>
+      <button class="btn btn-ghost btn-small" data-act="new-visa">+ 录入证件</button>
+    </div>
+    ${visas.length
+      ? `<div class="visa-list">${visas.map(visaCard).join('')}</div>`
+      : `<div class="muted small visa-empty">还没有录入签证/护照 · 录入后系统自动在到期前 90 / 60 / 30 天各建一条办理任务</div>`}
+  </div>`;
+}
+
+function mkVisaTask(visa, title, dueDate, node) {
+  return {
+    id: uuid(),
+    title,
+    domain: '内部与系统',
+    type: '单点',
+    priority: node.priority,
+    status: '进行中',
+    relatedPerson: [],
+    dueDate,
+    createdAt: new Date().toISOString(),
+    postponeCount: 0,
+    postponeHistory: [],
+    progressHistory: [{ date: todayISO(), type: '创建', content: '证件到期提醒自动生成' }],
+    linkedVisaId: visa.id,
+    _alertLevel: node.alertLevel,
+  };
+}
+
+function deriveVisaTasks(visa) {
+  const today = todayISO();
+  const head = visa.docType === '护照' ? '换发护照' : `重新办理签证:${visa.country}`;
+  const extra = visa.visaType ? ` ${visa.visaType}` : '';
+  const made = [];
+  for (const node of VISA_NODES) {
+    const dueDate = addDays(visa.expiryDate, -node.days);
+    if (dueDate < today) continue;   // 已经过去的节点不补建
+    made.push(mkVisaTask(visa, `${head}${extra}(${visa.expiryDate} 到期)· 提前${node.days}天`, dueDate, node));
+  }
+  if (!made.length) {
+    const left = daysBetween(today, visa.expiryDate);
+    const tail = left < 0 ? `已过期 ${-left} 天,需重新办理` : `已不足 30 天,尽快办理`;
+    made.push(mkVisaTask(visa, `${head}${extra}(${visa.expiryDate} 到期)· ${tail}`, today, VISA_NODES[2]));
+  }
+  State.tasks.push(...made);
+  visa.relatedTaskIds = made.map(t => t.id);
+  return made.length;
+}
+
+function openVisaModal(existing) {
+  const v = existing || { docType: '签证', country: '', visaType: '', expiryDate: '', notes: '' };
+  const typeOpts = ['签证', '护照'].map(x =>
+    `<option ${x === (v.docType || '签证') ? 'selected' : ''}>${x}</option>`).join('');
+
+  const actions = [
+    { label: '取消', onClick: closeModal },
+    { label: existing ? '保存并重建提醒' : '保存并建提醒', primary: true, onClick: () => {
+      const nv = existing ? { ...existing } : { id: uuid(), relatedTaskIds: [] };
+      nv.docType    = $('#visa-doctype').value;
+      nv.country    = $('#visa-country').value.trim();
+      nv.visaType   = $('#visa-kind').value.trim();
+      nv.expiryDate = $('#visa-exp').value;
+      nv.notes      = $('#visa-notes').value.trim();
+      if (!nv.expiryDate) { toast('请填写有效期至'); return; }
+      if (nv.docType === '签证' && !nv.country) { toast('请填写国家/地区'); return; }
+
+      // 重建:先清掉这本证件原来的派生任务
+      State.tasks = State.tasks.filter(x => x.linkedVisaId !== nv.id);
+      if (existing) {
+        const i = State.visas.findIndex(x => x.id === nv.id);
+        if (i >= 0) State.visas[i] = nv; else State.visas.push(nv);
+      } else {
+        State.visas.push(nv);
+      }
+      const n = deriveVisaTasks(nv);
+      persistVisas(); persistTasks();
+      closeModal(); renderAll();
+      toast(`已保存 · 生成 ${n} 条办理提醒`);
+    }},
+  ];
+
+  const extraButtons = existing ? [
+    { label: '删除证件', danger: true, onClick: () => {
+      if (!confirm(`确定删除「${visaName(existing)}」及其提醒任务?`)) return;
+      State.tasks = State.tasks.filter(x => x.linkedVisaId !== existing.id);
+      State.visas = State.visas.filter(x => x.id !== existing.id);
+      persistVisas(); persistTasks();
+      closeModal(); renderAll(); toast('已删除');
+    }},
+  ] : [];
+
+  openModal({
+    title: existing ? '编辑证件' : '录入证件',
+    body: `
+      <div class="row">
+        <label class="flex1">证件类型<select id="visa-doctype">${typeOpts}</select></label>
+        <label class="flex1">国家/地区<input id="visa-country" value="${escapeHtml(v.country)}" placeholder="如:美国 / 申根 / 中国"></label>
+      </div>
+      <label>种类/说明<input id="visa-kind" value="${escapeHtml(v.visaType)}" placeholder="如:B1/B2 十年多次 · 因私护照"></label>
+      <label>有效期至<input id="visa-exp" type="date" value="${v.expiryDate || ''}"></label>
+      <label>备注<input id="visa-notes" value="${escapeHtml(v.notes || '')}" placeholder="如:每次停留不超过90天"></label>
+      <div class="muted small">保存后自动在到期前 90 / 60 / 30 天各建一条办理任务(90 普通 · 60 琥珀 · 30 红色)。已经过去的节点不补建;若已不足 30 天或已过期,直接建一条今天到期的任务。</div>
+      <div class="muted small">建议不要在这里填写护照号等证件号码。</div>`,
+    actions,
+    extraButtons,
+  });
 }
 
 function deriveTripTasks(trip) {
