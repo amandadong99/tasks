@@ -1440,3 +1440,31 @@ body.reordering .fp-item { transition: transform .18s ease; }
   flex: none; padding: 3px 10px; border-radius: 999px;
   font-size: 12px; font-weight: 700; white-space: nowrap;
 }
+
+/* ===== 语音录入 ===== */
+#fab-mic {
+  position: fixed; right: 16px; bottom: calc(136px + env(safe-area-inset-bottom));
+  width: 52px; height: 52px; border-radius: 26px;
+  background: #1f2937; color: #fff; border: none;
+  font-size: 24px; line-height: 1;
+  cursor: pointer; z-index: 45;
+  box-shadow: 0 4px 14px rgba(31, 41, 55, 0.35);
+  -webkit-user-select: none; user-select: none; touch-action: none;
+}
+#fab-mic:active { transform: scale(0.93); background: #dc2626; }
+#voice-overlay {
+  position: fixed; inset: 0; z-index: 120;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex; align-items: center; justify-content: center;
+}
+#voice-overlay[hidden] { display: none; }
+.voice-box {
+  background: var(--c-card); border-radius: 16px; padding: 22px 20px;
+  width: 80%; max-width: 320px; text-align: center;
+}
+.voice-wave { font-size: 34px; animation: voicePulse 1s ease-in-out infinite; }
+@keyframes voicePulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.18); } }
+.voice-text { margin: 10px 0 6px; font-size: 16px; font-weight: 600; min-height: 22px; word-break: break-all; }
+@media (min-width: 600px) {
+  #fab-mic { right: calc(50% - 282px); }
+}
