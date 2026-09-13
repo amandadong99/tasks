@@ -1417,14 +1417,18 @@ body.reordering .fp-item { transition: transform .18s ease; }
   .modal { left: 50%; transform: translateX(-50%); width: 560px; max-width: 92vw; }
 }
 
-/* ===== 证件(签证/护照)有效期 ===== */
-.visa-bar { margin-bottom: 12px; }
-.visa-head {
-  display: flex; align-items: center; justify-content: space-between;
-  margin-bottom: 6px;
+/* ===== 证件(签证 / 护照 / 免签)===== */
+.visa-section { margin-bottom: 14px; }
+.visa-sec-head {
+  display: flex; align-items: baseline; gap: 6px;
+  font-weight: 700; font-size: 14px; margin-bottom: 6px;
 }
-.visa-title { font-weight: 700; font-size: 15px; }
 .visa-empty { padding: 8px 10px; }
+.visa-dot {
+  display: inline-block; margin-left: 5px; padding: 0 6px;
+  border-radius: 999px; background: #dc2626; color: #fff;
+  font-size: 11px; font-weight: 700; line-height: 16px;
+}
 .visa-list { display: flex; flex-direction: column; gap: 6px; }
 .visa-card {
   display: flex; align-items: center; justify-content: space-between;
