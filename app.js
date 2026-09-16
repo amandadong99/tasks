@@ -8,7 +8,7 @@
 'use strict';
 
 /* === 版本号(与 service-worker.js 的 CACHE_VERSION 保持一致)=== */
-const APP_VERSION = 'v5.11.1';
+const APP_VERSION = 'v5.11.2';
 
 /* ---------------------------------------------------------------------
  * 0. 工具函数
@@ -1724,7 +1724,7 @@ function renderTrip() {
   });
 
   // 顶部工具条 + 视图切换
-  const visaAlertN = State.visas.filter(v => v.docType !== '免签' && v.expiryDate && daysBetween(today, v.expiryDate) <= 30).length;
+  const visaAlertN = State.visas.filter(v => v.expiryDate && daysBetween(today, v.expiryDate) <= 30).length;
   let html = `<div class="trip-toolbar">
     <button class="btn btn-primary" data-act="new-trip">+ 新建出差</button>
     <button class="btn btn-ghost btn-small" data-act="manage-templates">管理模板</button>
@@ -2779,21 +2779,11 @@ function visaStatus(v) {
 
 function visaName(v) {
   if (v.docType === '护照') return `护照${v.country ? ' · ' + v.country : ''}`;
-  if (v.docType === '免签') return `${v.country || '未填国家'} 免签`;
   return `${v.country || '未填国家'} 签证`;
 }
 
 function visaCard(v) {
   const sub = [v.visaType, v.notes].filter(Boolean).join(' · ');
-  if (v.docType === '免签') {
-    return `<div class="card visa-card" data-vid="${v.id}" style="border-left:4px solid #0369a1">
-      <div class="visa-card-main">
-        <div class="visa-name">${escapeHtml(visaName(v))}</div>
-        ${sub ? `<div class="muted small">${escapeHtml(sub)}</div>` : ''}
-      </div>
-      <span class="visa-badge" style="background:#e0f2fe;color:#0369a1">免签</span>
-    </div>`;
-  }
   const s = visaStatus(v);
   return `<div class="card visa-card" data-vid="${v.id}" style="border-left:4px solid ${s.color}">
     <div class="visa-card-main">
@@ -2806,11 +2796,8 @@ function visaCard(v) {
 }
 
 function openVisaManager() {
-  const all = [...State.visas];
-  const dated = all.filter(v => v.docType !== '免签')
-                   .sort((a, b) => (a.expiryDate || '').localeCompare(b.expiryDate || ''));
-  const free  = all.filter(v => v.docType === '免签')
-                   .sort((a, b) => (a.country || '').localeCompare(b.country || '', 'zh'));
+  const dated = [...State.visas]
+    .sort((a, b) => (a.expiryDate || '').localeCompare(b.expiryDate || ''));
 
   openModal({
     title: '证件与签证',
@@ -2820,16 +2807,9 @@ function openVisaManager() {
         ${dated.length
           ? `<div class="visa-list">${dated.map(visaCard).join('')}</div>`
           : `<div class="muted small visa-empty">还没有录入签证/护照 · 录入后自动在到期前 90 / 60 / 30 天各建一条办理任务</div>`}
-      </div>
-      <div class="visa-section">
-        <div class="visa-sec-head">免签国家 <span class="muted small">${free.length} 项</span></div>
-        ${free.length
-          ? `<div class="visa-list">${free.map(visaCard).join('')}</div>`
-          : `<div class="muted small visa-empty">免签国家只做记录,不产生到期提醒</div>`}
       </div>`,
     extraButtons: [
-      { label: '+ 录入证件', onClick: () => { closeModal(); openVisaModal(null, '签证'); } },
-      { label: '+ 免签国家', green: true, onClick: () => { closeModal(); openVisaModal(null, '免签'); } },
+      { label: '+ 录入证件', primary: true, onClick: () => { closeModal(); openVisaModal(null, '签证'); } },
     ],
     actions: [{ label: '关闭', onClick: closeModal }],
   });
@@ -2887,7 +2867,7 @@ function deriveVisaTasks(visa) {
 
 function openVisaModal(existing, defaultType) {
   const v = existing || { docType: defaultType || '签证', country: '', visaType: '', expiryDate: '', notes: '' };
-  const typeOpts = ['签证', '护照', '免签'].map(x =>
+  const typeOpts = ['签证', '护照'].map(x =>
     `<option ${x === (v.docType || '签证') ? 'selected' : ''}>${x}</option>`).join('');
 
   const actions = [
@@ -2899,13 +2879,8 @@ function openVisaModal(existing, defaultType) {
       nv.visaType   = $('#visa-kind').value.trim();
       nv.expiryDate = $('#visa-exp').value;
       nv.notes      = $('#visa-notes').value.trim();
-      if (nv.docType === '免签') {
-        nv.expiryDate = '';
-        if (!nv.country) { toast('请填写国家/地区'); return; }
-      } else {
-        if (!nv.expiryDate) { toast('请填写有效期至'); return; }
-        if (nv.docType === '签证' && !nv.country) { toast('请填写国家/地区'); return; }
-      }
+      if (!nv.expiryDate) { toast('请填写有效期至'); return; }
+      if (nv.docType === '签证' && !nv.country) { toast('请填写国家/地区'); return; }
 
       // 重建:先清掉这本证件原来的派生任务
       State.tasks = State.tasks.filter(x => x.linkedVisaId !== nv.id);
@@ -2915,10 +2890,10 @@ function openVisaModal(existing, defaultType) {
       } else {
         State.visas.push(nv);
       }
-      const n = nv.docType === '免签' ? 0 : deriveVisaTasks(nv);
+      const n = deriveVisaTasks(nv);
       persistVisas(); persistTasks();
       closeModal(); renderAll(); openVisaManager();
-      toast(nv.docType === '免签' ? '已保存 · 免签记录不产生提醒' : `已保存 · 生成 ${n} 条办理提醒`);
+      toast(`已保存 · 生成 ${n} 条办理提醒`);
     }},
   ];
 
@@ -2933,34 +2908,20 @@ function openVisaModal(existing, defaultType) {
   ] : [];
 
   openModal({
-    title: existing ? '编辑证件' : (v.docType === '免签' ? '添加免签国家' : '录入证件'),
+    title: existing ? '编辑证件' : '录入证件',
     body: `
       <div class="row">
         <label class="flex1">类型<select id="visa-doctype">${typeOpts}</select></label>
         <label class="flex1">国家/地区<input id="visa-country" value="${escapeHtml(v.country)}" placeholder="如:美国 / 申根 / 中国"></label>
       </div>
       <label>种类/说明<input id="visa-kind" value="${escapeHtml(v.visaType)}" placeholder="如:B1/B2 十年多次 · 落地签 · 因私护照"></label>
-      <label id="visa-exp-wrap">有效期至<input id="visa-exp" type="date" value="${v.expiryDate || ''}"></label>
+      <label>有效期至<input id="visa-exp" type="date" value="${v.expiryDate || ''}"></label>
       <label>备注<input id="visa-notes" value="${escapeHtml(v.notes || '')}" placeholder="如:每次停留不超过90天"></label>
-      <div class="muted small" id="visa-hint"></div>
+      <div class="muted small">保存后自动在到期前 90 / 60 / 30 天各建一条办理任务(90 普通 · 60 琥珀 · 30 红色)。已经过去的节点不补建;若已不足 30 天或已过期,直接建一条今天到期的任务。</div>
       <div class="muted small">建议不要在这里填写护照号等证件号码。</div>`,
     actions,
     extraButtons,
   });
-
-  // 类型切换:免签不需要有效期,也不产生提醒
-  const typeEl = $('#visa-doctype');
-  const expWrap = $('#visa-exp-wrap');
-  const hintEl = $('#visa-hint');
-  const syncType = () => {
-    const isFree = typeEl.value === '免签';
-    expWrap.style.display = isFree ? 'none' : '';
-    hintEl.textContent = isFree
-      ? '免签国家只做记录,不会生成任何提醒任务。停留天数等写在"种类/说明"或备注里。'
-      : '保存后自动在到期前 90 / 60 / 30 天各建一条办理任务(90 普通 · 60 琥珀 · 30 红色)。已经过去的节点不补建;若已不足 30 天或已过期,直接建一条今天到期的任务。';
-  };
-  typeEl.addEventListener('change', syncType);
-  syncType();
 }
 
 function deriveTripTasks(trip) {
