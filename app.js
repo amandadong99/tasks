@@ -8,7 +8,7 @@
 'use strict';
 
 /* === 版本号(与 service-worker.js 的 CACHE_VERSION 保持一致)=== */
-const APP_VERSION = 'v5.11.0';
+const APP_VERSION = 'v5.11.1';
 
 /* ---------------------------------------------------------------------
  * 0. 工具函数
@@ -4519,178 +4519,6 @@ const Lock = {
 };
 
 /* ---------------------------------------------------------------------
- * 17b. 语音录入任务(按住说话)
- *   识别走浏览器 Web Speech API(iOS 14.5+ Safari 支持,不联网到第三方)
- *   识别完成后解析"明天/下周三/3月5号"等口语日期,预填新建任务弹窗
- * ------------------------------------------------------------------ */
-const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
-
-const CN_NUM = { 零:0, 一:1, 二:2, 两:2, 三:3, 四:4, 五:5, 六:6, 七:7, 八:8, 九:9, 十:10 };
-function cnToNum(str) {
-  if (str == null) return NaN;
-  const s = String(str).trim();
-  if (/^\d+$/.test(s)) return parseInt(s, 10);
-  if (s === '十') return 10;
-  const m = s.match(/^(.?)十(.?)$/);
-  if (m) {
-    const tens = m[1] ? CN_NUM[m[1]] : 1;
-    const ones = m[2] ? CN_NUM[m[2]] : 0;
-    if (tens == null || ones == null || isNaN(tens) || isNaN(ones)) return NaN;
-    return tens * 10 + ones;
-  }
-  return CN_NUM[s] != null ? CN_NUM[s] : NaN;
-}
-
-/** 口语 → { title, dueDate, priority } */
-function parseSpokenTask(raw) {
-  let text = String(raw || '').trim();
-  const today = todayISO();
-  const N = '[0-9一二三四五六七八九十两]';
-  let dueDate = null, priority = null, m = null;
-  const cut = (re) => {
-    const mm = text.match(re);
-    if (mm) text = text.replace(mm[0], ' ');
-    return mm;
-  };
-
-  // 优先级词
-  if (cut(/(紧急|加急|很急|特急|马上|立刻)/)) priority = 'P0';
-  else if (cut(/(不急|有空再|随时)/)) priority = 'P2';
-
-  // 日期(按特异性从高到低)
-  if ((m = cut(/大后天/))) dueDate = addDays(today, 3);
-  else if ((m = cut(/后天/))) dueDate = addDays(today, 2);
-  else if ((m = cut(/(明天|明日)/))) dueDate = addDays(today, 1);
-  else if ((m = cut(/(今天|今日|今晚)/))) dueDate = today;
-  else if ((m = cut(new RegExp('(' + N + '{1,3})\\s*(?:天|日)(?:以)?后')))) {
-    const n = cnToNum(m[1]); if (!isNaN(n)) dueDate = addDays(today, n);
-  }
-  else if ((m = cut(new RegExp('(' + N + '{1,2})\\s*(?:个)?\\s*(?:星期|礼拜|周)(?:以)?后')))) {
-    const n = cnToNum(m[1]); if (!isNaN(n)) dueDate = addDays(today, n * 7);
-  }
-  else if ((m = cut(/(下下|下|这|本)?\s*(?:星期|礼拜|周)\s*([一二三四五六日天七1-7])/))) {
-    const WD = { 一:1, 二:2, 三:3, 四:4, 五:5, 六:6, 日:0, 天:0, 七:0 };
-    let target = WD[m[2]];
-    if (target == null) target = parseInt(m[2], 10) % 7;
-    const cur = parseLocalDate(today).getDay();
-    let diff = (target - cur + 7) % 7;
-    if (m[1] === '下') diff += 7;
-    else if (m[1] === '下下') diff += 14;
-    dueDate = addDays(today, diff);
-  }
-  else if ((m = cut(new RegExp('下\\s*(?:个)?\\s*月\\s*(' + N + '{1,3})\\s*[号日]')))) {
-    const d = cnToNum(m[1]);
-    if (!isNaN(d)) {
-      const base = parseLocalDate(today);
-      const nd = new Date(base.getFullYear(), base.getMonth() + 1, d);
-      dueDate = `${nd.getFullYear()}-${String(nd.getMonth() + 1).padStart(2, '0')}-${String(nd.getDate()).padStart(2, '0')}`;
-    }
-  }
-  else if ((m = cut(new RegExp('(' + N + '{1,3})\\s*月\\s*(' + N + '{1,3})\\s*[号日]')))) {
-    const mo = cnToNum(m[1]), d = cnToNum(m[2]);
-    if (!isNaN(mo) && !isNaN(d) && mo >= 1 && mo <= 12) {
-      const y = parseLocalDate(today).getFullYear();
-      let iso = `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-      if (iso < today) iso = `${y + 1}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-      dueDate = iso;
-    }
-  }
-  else if ((m = cut(new RegExp('(' + N + '{1,3})\\s*[号日](?![的之])')))) {
-    const d = cnToNum(m[1]);
-    if (!isNaN(d) && d >= 1 && d <= 31) {
-      const base = parseLocalDate(today);
-      let nd = new Date(base.getFullYear(), base.getMonth(), d);
-      const iso = (x) => `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`;
-      if (iso(nd) < today) nd = new Date(base.getFullYear(), base.getMonth() + 1, d);
-      dueDate = iso(nd);
-    }
-  }
-
-  // 口头引导词与标点清理
-  text = text
-    .replace(/^(?:提醒我|帮我记一下|帮我记|记一下|记录一下|新建任务|添加任务|加个任务|待办)\s*/,'')
-    .replace(/\s+/g, ' ')
-    .replace(/^[,,、.。\s]+|[,,、.。\s]+$/g, '')
-    .trim();
-
-  return { title: text, dueDate, priority };
-}
-
-function setupVoiceInput() {
-  const micBtn = $('#fab-mic');
-  if (!micBtn) return;
-  if (!SpeechRec) { micBtn.hidden = true; return; }   // 浏览器不支持 → 不显示按钮
-  micBtn.hidden = false;
-
-  const overlay = $('#voice-overlay');
-  const textEl = $('#voice-text');
-  let rec = null, finalText = '', listening = false, aborted = false;
-
-  const showOverlay = (msg) => { textEl.textContent = msg; overlay.hidden = false; };
-  const hideOverlay = () => { overlay.hidden = true; };
-
-  const start = (e) => {
-    if (e) e.preventDefault();
-    if (listening) return;
-    finalText = ''; aborted = false;
-    try {
-      rec = new SpeechRec();
-    } catch (err) { toast('这台设备不支持语音识别'); return; }
-    rec.lang = 'zh-CN';
-    rec.interimResults = true;
-    rec.continuous = true;
-    rec.onresult = (ev) => {
-      let interim = '';
-      for (let i = ev.resultIndex; i < ev.results.length; i++) {
-        const r = ev.results[i];
-        if (r.isFinal) finalText += r[0].transcript;
-        else interim += r[0].transcript;
-      }
-      textEl.textContent = (finalText + interim) || '正在听…';
-    };
-    rec.onerror = (ev) => {
-      listening = false; hideOverlay();
-      if (ev.error === 'not-allowed' || ev.error === 'service-not-allowed') {
-        toast('麦克风被拒绝 · 请在系统设置里允许本站使用麦克风', 3000);
-      } else if (ev.error !== 'aborted') {
-        toast(`语音识别失败:${ev.error}`, 2500);
-      }
-    };
-    rec.onend = () => {
-      listening = false; hideOverlay();
-      const said = finalText.trim();
-      if (aborted || !said) return;
-      const parsed = parseSpokenTask(said);
-      if (!parsed.title) { toast('没听清,再说一次'); return; }
-      openTaskModal(null, {
-        title: parsed.title,
-        dueDate: parsed.dueDate || todayISO(),
-        priority: parsed.priority || 'P1',
-      });
-      if (parsed.dueDate) toast(`截止日期已识别为 ${parsed.dueDate}`, 2200);
-    };
-    try {
-      rec.start();
-      listening = true;
-      showOverlay('正在听…');
-      if (navigator.vibrate) navigator.vibrate(15);
-    } catch (err) { listening = false; hideOverlay(); toast('无法启动麦克风'); }
-  };
-
-  const stop = (e) => {
-    if (e) e.preventDefault();
-    if (!listening || !rec) return;
-    try { rec.stop(); } catch {}
-  };
-
-  micBtn.addEventListener('pointerdown', start);
-  micBtn.addEventListener('pointerup', stop);
-  micBtn.addEventListener('pointerleave', stop);
-  micBtn.addEventListener('pointercancel', (e) => { aborted = true; stop(e); });
-  micBtn.addEventListener('contextmenu', (e) => e.preventDefault());
-}
-
-/* ---------------------------------------------------------------------
  * 18. 启动
  * ------------------------------------------------------------------ */
 function init() {
@@ -4708,9 +4536,6 @@ function init() {
     else if (State.ui.tab === 'team') openFuzzyPlanModal();  // 客户来访 tab
     else openTaskModal();
   };
-
-  // 语音录入(按住说话)
-  setupVoiceInput();
 
   // 设置
   $('#settings-btn').onclick = openSettings;
