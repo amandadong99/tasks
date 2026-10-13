@@ -8,7 +8,7 @@
 'use strict';
 
 /* === 版本号(与 service-worker.js 的 CACHE_VERSION 保持一致)=== */
-const APP_VERSION = 'v5.11.2';
+const APP_VERSION = 'v5.11.4';
 
 /* ---------------------------------------------------------------------
  * 0. 工具函数
@@ -1957,8 +1957,10 @@ function renderIncomingView() {
   }
   if (migrated) { persistFuzzyPlans(); console.info(`[fp migrate] 从文字解析 ${migrated} 条时间`); }
 
-  // 排序:手动 sortOrder 优先 → 有效日期由近到远 → 无时间垫底
+  // 排序:已过期(月份已过)的计划沉底 → 手动 sortOrder 优先 → 有效日期由近到远 → 无时间垫底
   const list = [...(State.fuzzyPlans || [])].sort((a, b) => {
+    const ap = fpMonthDiff(a) < 0, bp = fpMonthDiff(b) < 0;
+    if (ap !== bp) return ap ? 1 : -1;
     const ao = a.sortOrder, bo = b.sortOrder;
     if (ao != null && bo != null) return ao - bo;
     if (ao != null) return -1;
@@ -2680,7 +2682,9 @@ function openTripModal(existing) {
     name: '', destination: '', departureDate: '', returnDate: '',
     templateId: 'tpl-intl-standard', tripType: 'visit', autoVideoMeeting: true,
   };
-  const tplOptions = State.templates.map(tp =>
+  // 「无」= 不套模板,不派生任何提醒节点
+  const tplOptions = `<option value="" ${!t.templateId ? 'selected' : ''}>无(不派生提醒)</option>` +
+    State.templates.map(tp =>
     `<option value="${tp.id}" ${tp.id === t.templateId ? 'selected' : ''}>${escapeHtml(tp.name)}</option>`).join('');
   const typeOptions = Object.entries(TRIP_TYPES).map(([k, v]) =>
     `<option value="${k}" ${k === (t.tripType||'visit') ? 'selected' : ''}>${v.name}</option>`).join('');
@@ -2702,7 +2706,7 @@ function openTripModal(existing) {
         <input type="checkbox" id="trip-video" ${t.autoVideoMeeting ? 'checked' : ''}>
         出差期间会议自动改视频
       </label>
-      <div class="muted small">保存后系统按出发日期自动倒推派生任务(包含"出发前1天备份电脑数据"提醒)。</div>`,
+      <div class="muted small">保存后系统按出发日期自动倒推派生任务(包含"出发前1天备份电脑数据"提醒)。模板选「无」则不派生任何提醒。</div>`,
     actions: [
       { label: '取消', onClick: closeModal },
       { label: '保存并派生任务', primary: true, onClick: () => {
@@ -2729,7 +2733,7 @@ function openTripModal(existing) {
         persistTrips(); persistTasks();
         closeModal();
         renderAll();
-        toast('行程已保存,任务已派生');
+        toast(trip.templateId ? '行程已保存,任务已派生' : '行程已保存(未套用模板)');
       }},
     ],
   });
@@ -2926,7 +2930,7 @@ function openVisaModal(existing, defaultType) {
 
 function deriveTripTasks(trip) {
   const tpl = State.templates.find(x => x.id === trip.templateId);
-  if (!tpl) return;
+  if (!tpl) { trip.relatedTaskIds = []; return; }  // 模板选「无」:不派生
   const today = todayISO();
   const newTasks = tpl.tasks.map(item => {
     let dueDate;
