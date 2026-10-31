@@ -108,7 +108,7 @@ window.AmandaFirebase = {
   },
 
   /* ============= Firebase 初始化与同步 ============= */
-  async init(passphraseOverride) {
+  async init(passphraseOverride, options = {}) {
     if (!this.ENABLED) return { ok: false, reason: 'disabled' };
     if (!this.config.projectId) {
       console.warn('[Sync] firebase-config.js 未填 projectId,跳过');
@@ -128,8 +128,11 @@ window.AmandaFirebase = {
       this.cryptoKey = await this.Crypto.deriveKey(pass);
       this.userId = await this.Crypto.deriveUserId(pass);
 
-      // 把加密钥也存到 IndexedDB,Service Worker 收到 push 时能用它解密标题
-      await this._storeCryptoKeyInIDB(this.cryptoKey, this.userId);
+      // 普通任务指挥台需要把派生密钥交给 Service Worker 解密推送；TwinRider 嵌入页
+      // 只在当前页面内存中使用，不把密钥或派生密钥写入浏览器持久存储。
+      if (options.persistCryptoKey !== false) {
+        await this._storeCryptoKeyInIDB(this.cryptoKey, this.userId);
+      }
 
       // 加载 Firebase SDK
       const [appMod, fsMod] = await Promise.all([

@@ -8,7 +8,11 @@
 'use strict';
 
 /* === 版本号(与 service-worker.js 的 CACHE_VERSION 保持一致)=== */
-const APP_VERSION = 'v5.11.4';
+const APP_VERSION = 'v5.11.6';
+const EMBED_MODE = new URLSearchParams(window.location.search).get('embed') || '';
+const EMBED_TRIP = EMBED_MODE === 'trip';
+const EMBED_SYNC = EMBED_MODE === 'sync';
+const TWINRIDER_ORIGIN = 'http://127.0.0.1:7863';
 
 /* ---------------------------------------------------------------------
  * 0. 工具函数
@@ -3894,6 +3898,7 @@ function renderAll() {
   generateDateBasedInstances();
   renderCurrentView();
   updateBadges();
+  publishTwinRiderSnapshot();
 }
 
 function updateBadges() {
@@ -4484,12 +4489,112 @@ const Lock = {
 };
 
 /* ---------------------------------------------------------------------
+ * TwinRider 嵌入桥：父页面只提供本机钥匙串中的工作密钥，子页面只回传
+ * 今日/超期任务摘要。密钥不写入 TwinRider 配置，也不会通过此桥回传。
+ * ------------------------------------------------------------------ */
+const isTwinRiderEmbed = () => !!EMBED_MODE && window.parent !== window;
+let embeddedUnlockChain = Promise.resolve();
+
+function postToTwinRider(message) {
+  if (!isTwinRiderEmbed()) return;
+  window.parent.postMessage(message, TWINRIDER_ORIGIN);
+}
+
+function twinRiderSnapshot() {
+  const tomorrow = addDays(todayISO(), 1);
+  const overdue = State.tasks.filter(isOverdue);
+  const today = State.tasks.filter(t =>
+    !isOverdue(t) && (
+      isToday(t) ||
+      (t.type === '节奏-日期型' && t._instanceDueToday) ||
+      (t.type === '节奏-频率型' && t._freqDueToday)
+    )
+  );
+  const endOfWeek = endOfThisWeekISO();
+  const todayDate = todayISO();
+  const week = State.tasks.filter(t =>
+    t.status !== '已完成' && t.dueDate && t.dueDate >= todayDate && t.dueDate <= endOfWeek
+  );
+  const all = State.tasks.filter(t =>
+    t.status !== '已完成' && t.type !== '节奏-频率型' && t.type !== '节奏-日期型'
+  );
+  const selected = [...overdue, ...today].filter((task, index, items) =>
+    items.findIndex(x => x.id === task.id) === index
+  );
+  return {
+    type: 'amanda-tasks:snapshot',
+    version: 1,
+    counts: {
+      overdue: overdue.length,
+      today: today.length,
+      tomorrow: State.tasks.filter(t => t.dueDate === tomorrow && t.status !== '已完成').length,
+      week: week.length,
+      all: all.length,
+    },
+    tasks: selected.map(t => ({
+      id: String(t.id || ''),
+      title: String(t.title || ''),
+      priority: String(t.priority || ''),
+      dueDate: String(t.dueDate || ''),
+      overdue: isOverdue(t),
+    })),
+  };
+}
+
+function publishTwinRiderSnapshot() {
+  if (!isTwinRiderEmbed()) return;
+  if (window.AmandaFirebase?.ENABLED && !window.AmandaFirebase.ready) return;
+  postToTwinRider(twinRiderSnapshot());
+}
+
+function unlockFromTwinRider(key) {
+  embeddedUnlockChain = embeddedUnlockChain.then(async () => {
+    if (window.AmandaFirebase?.ready) {
+      postToTwinRider({ type: 'amanda-tasks:status', status: 'connected' });
+      publishTwinRiderSnapshot();
+      return;
+    }
+    if (typeof key !== 'string' || key.trim().length < 8 || key.length > 256) {
+      postToTwinRider({ type: 'amanda-tasks:status', status: 'invalid-key' });
+      return;
+    }
+    postToTwinRider({ type: 'amanda-tasks:status', status: 'connecting' });
+    const result = await window.AmandaFirebase.init(key.trim(), { persistCryptoKey: false });
+    if (!result.ok) {
+      postToTwinRider({
+        type: 'amanda-tasks:status',
+        status: result.reason === 'wrong-key' ? 'wrong-key' : 'connection-error',
+      });
+      return;
+    }
+    document.getElementById('lock-screen')?.remove();
+    renderAll();
+    postToTwinRider({ type: 'amanda-tasks:status', status: 'connected' });
+  }).catch(() => {
+    postToTwinRider({ type: 'amanda-tasks:status', status: 'connection-error' });
+  });
+  return embeddedUnlockChain;
+}
+
+function setupTwinRiderBridge() {
+  if (!isTwinRiderEmbed()) return;
+  window.addEventListener('message', event => {
+    if (event.origin !== TWINRIDER_ORIGIN || event.source !== window.parent) return;
+    if (event.data?.type === 'twinrider:amanda-unlock') unlockFromTwinRider(event.data.key);
+  });
+  postToTwinRider({ type: 'amanda-tasks:ready', mode: EMBED_MODE });
+  postToTwinRider({ type: 'amanda-tasks:status', status: 'locked' });
+}
+
+/* ---------------------------------------------------------------------
  * 18. 启动
  * ------------------------------------------------------------------ */
 function init() {
   initData();
+  document.body.classList.toggle('embed-trip', EMBED_TRIP);
+  document.body.classList.toggle('embed-sync', EMBED_SYNC);
   renderGreeting();
-  switchTab('today');
+  switchTab(EMBED_TRIP ? 'trip' : 'today');
 
   // Tab 切换
   $$('.tab').forEach(b => b.onclick = () => switchTab(b.dataset.tab));
@@ -4542,18 +4647,21 @@ function init() {
 
   // 控制台命令 + 暴露给 firebase-config.js 调用
   window.AmandaTasks = { State, Store, KEY, renderAll, captureSyncSnapshot, Lock };
+  setupTwinRiderBridge();
 
   // 启动 Firebase 同步:先锁屏校验密钥
   if (window.AmandaFirebase?.ENABLED) {
     captureSyncSnapshot();
-    Lock.checkAndPrompt().catch(e => console.warn('[Lock] error', e));
+    if (!isTwinRiderEmbed()) Lock.checkAndPrompt().catch(e => console.warn('[Lock] error', e));
+  } else {
+    publishTwinRiderSnapshot();
   }
 
   // 工作日提示卡(每天弹一次)— 延迟 800ms 避开锁屏
-  setTimeout(showDailyFocusReminder, 800);
+  if (!EMBED_MODE) setTimeout(showDailyFocusReminder, 800);
 
   // 首次在 iPhone PWA 打开时,提示开启通知(为了主屏徽章)
-  setTimeout(maybeOfferNotificationOptIn, 1500);
+  if (!EMBED_MODE) setTimeout(maybeOfferNotificationOptIn, 1500);
 }
 
 document.addEventListener('DOMContentLoaded', init);

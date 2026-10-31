@@ -590,6 +590,21 @@ body.reordering .person-card { transition: transform .18s ease; }
 }
 #fab:active { transform: scale(0.93); }
 
+/* TwinRider 嵌入模式：仅显示出差模块，数据仍由任务指挥台管理和同步。 */
+body.embed-trip #appbar,
+body.embed-trip #tabbar,
+body.embed-trip #fab { display: none !important; }
+body.embed-trip #main {
+  max-width: 100%;
+  min-height: 100vh;
+  padding: 18px 20px 40px;
+}
+body.embed-trip .view[data-view="trip"] { max-width: 980px; margin: 0 auto; }
+
+/* TwinRider 的隐藏同步页不绘制界面，只通过受限 postMessage 发送任务摘要。 */
+body.embed-sync { background: transparent; }
+body.embed-sync > * { display: none !important; }
+
 /* ---- 模态层 ---- */
 #modal-root { display: none; }
 #modal-root.open { display: block; }
@@ -1415,6 +1430,7 @@ body.reordering .fp-item { transition: transform .18s ease; }
   #tabbar { left: 50%; transform: translateX(-50%); right: auto; width: 600px; }
   #fab { right: calc(50% - 282px); }
   .modal { left: 50%; transform: translateX(-50%); width: 560px; max-width: 92vw; }
+  body.embed-trip #main { max-width: 100%; }
 }
 
 /* ===== 证件(签证 / 护照 / 免签)===== */
