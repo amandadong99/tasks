@@ -50,6 +50,8 @@ window.AmandaFirebase = {
   applyingRemote: false,
   _modules: null,
   _firstSyncDone: false,
+  _deletedIds: Object.create(null),
+  DELETE_QUEUE_KEY: 'amanda.syncDeleteQueue.v1',
   collMap: {
     tasks: 'tasks', persons: 'persons',
     trips: 'trips', templates: 'templates',
@@ -161,6 +163,7 @@ window.AmandaFirebase = {
       console.info(`[Sync] ✓ 已连接 (userId=${this.userId.slice(0,8)}...)`);
       await this.pullAndSubscribe();
       this._firstSyncDone = true;
+      await this.flushPendingDeletes();
       window.AmandaTasks?.captureSyncSnapshot?.();
       this._showStatus('已连接到云端,数据加密同步中', false);
       return { ok: true };
@@ -183,6 +186,15 @@ window.AmandaFirebase = {
       try { await this.Crypto.decrypt(this.cryptoKey, { iv: data.iv, ct: data.ct }); return true; }
       catch { return false; }
     }
+    // 数据可能已全部删除，只剩删除墓碑；此时也必须用墓碑校验密钥，
+    // 否则错误密钥会把本地旧数据当成首次使用重新上传。
+    const tombstoneSnap = await getDocs(query(this._tombstonesColl(), limit(1)));
+    if (!tombstoneSnap.empty) {
+      const data = tombstoneSnap.docs[0].data();
+      if (!data.iv || !data.ct) return true;
+      try { await this.Crypto.decrypt(this.cryptoKey, { iv: data.iv, ct: data.ct }); return true; }
+      catch { return false; }
+    }
     return true; // 远端为空,首次使用
   },
 
@@ -191,6 +203,120 @@ window.AmandaFirebase = {
   },
   _doc(stateKey, id) {
     return this._modules.doc(this.db, 'users', this.userId, this.collMap[stateKey], id);
+  },
+
+  _tombstonesColl() {
+    return this._modules.collection(this.db, 'users', this.userId, '_deletions');
+  },
+  _tombstoneDoc(stateKey, id) {
+    const raw = new TextEncoder().encode(`${stateKey}\u0000${id}`);
+    const tombstoneId = this.Crypto._b64u(raw);
+    return this._modules.doc(this.db, 'users', this.userId, '_deletions', tombstoneId);
+  },
+
+  _allPendingDeletes() {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(this.DELETE_QUEUE_KEY) || '[]');
+      return Array.isArray(parsed) ? parsed.filter(x => x && x.stateKey && x.id) : [];
+    } catch { return []; }
+  },
+  _pendingDeletes() {
+    return this._allPendingDeletes().filter(x =>
+      !x.userId || !this.userId || x.userId === this.userId);
+  },
+  _savePendingDeletes(items) {
+    try { localStorage.setItem(this.DELETE_QUEUE_KEY, JSON.stringify(items)); }
+    catch (err) { console.warn('[Sync] 保存删除队列失败:', err.message); }
+  },
+  _rememberDeleted(stateKey, id) {
+    (this._deletedIds[stateKey] ||= new Set()).add(id);
+  },
+  _isDeleted(stateKey, id) {
+    return this._deletedIds[stateKey]?.has(id) || false;
+  },
+  _filterDeleted(stateKey, items) {
+    return (items || []).filter(item => item?.id && !this._isDeleted(stateKey, item.id));
+  },
+
+  /**
+   * 先把删除意图写入 localStorage，再尝试上传。墓碑与原记录分开保存，
+   * 所以另一台离线设备即使重新上传旧记录，也无法覆盖删除状态。
+   */
+  queueDelete(stateKey, id) {
+    if (!stateKey || !id) return Promise.resolve({ ok: false, reason: 'invalid-delete' });
+    this._rememberDeleted(stateKey, id);
+    const pending = this._allPendingDeletes();
+    let entry = pending.find(x => x.stateKey === stateKey && x.id === id &&
+      (!x.userId || !this.userId || x.userId === this.userId));
+    if (!entry) {
+      entry = { stateKey, id, deletedAt: Date.now(), userId: this.userId || null };
+      pending.push(entry);
+      this._savePendingDeletes(pending);
+    }
+    if (this.ready && this._firstSyncDone) return this._commitDelete(entry);
+    return Promise.resolve({ ok: true, queued: true });
+  },
+
+  async _commitDelete(entry) {
+    if (!this.ready) return { ok: false, queued: true };
+    this.pendingPushes++;
+    this._updateSyncIndicator();
+    try {
+      const payload = {
+        stateKey: entry.stateKey,
+        id: entry.id,
+        deletedAt: entry.deletedAt,
+      };
+      const { iv, ct } = await this.Crypto.encrypt(this.cryptoKey, JSON.stringify(payload));
+      const batch = this._modules.writeBatch(this.db);
+      batch.set(this._tombstoneDoc(entry.stateKey, entry.id), { iv, ct, _syncedAt: Date.now() });
+      batch.delete(this._doc(entry.stateKey, entry.id));
+      await batch.commit();
+
+      const remaining = this._allPendingDeletes().filter(x =>
+        !(x.stateKey === entry.stateKey && x.id === entry.id &&
+          (!x.userId || !this.userId || x.userId === this.userId)));
+      this._savePendingDeletes(remaining);
+      this._rememberDeleted(entry.stateKey, entry.id);
+      return { ok: true };
+    } catch (err) {
+      console.error('[Sync] 删除同步失败,已保留重试队列:', err);
+      return { ok: false, queued: true, error: err };
+    } finally {
+      this.pendingPushes--;
+      this._updateSyncIndicator();
+    }
+  },
+
+  async flushPendingDeletes() {
+    if (!this.ready || !this._firstSyncDone) return;
+    const pending = this._pendingDeletes();
+    for (const entry of pending) await this._commitDelete(entry);
+  },
+
+  async _decodeTombstone(docSnap) {
+    const data = docSnap.data();
+    try {
+      if (data.iv && data.ct) {
+        return JSON.parse(await this.Crypto.decrypt(this.cryptoKey, { iv: data.iv, ct: data.ct }));
+      }
+      return data;
+    } catch (err) {
+      console.warn(`[Sync] 删除墓碑解密失败 ${docSnap.id}:`, err.message);
+      return null;
+    }
+  },
+
+  async _loadTombstones() {
+    this._deletedIds = Object.create(null);
+    for (const entry of this._pendingDeletes()) {
+      this._rememberDeleted(entry.stateKey, entry.id);
+    }
+    const snap = await this._modules.getDocs(this._tombstonesColl());
+    for (const d of snap.docs) {
+      const entry = await this._decodeTombstone(d);
+      if (entry?.stateKey && entry?.id) this._rememberDeleted(entry.stateKey, entry.id);
+    }
   },
 
   async pullAndSubscribe() {
@@ -202,19 +328,26 @@ window.AmandaFirebase = {
     try { await waitForPendingWrites(this.db); }
     catch (e) { console.warn('[Sync] init waitForPendingWrites:', e.message); }
 
+    // 删除墓碑必须先加载；否则旧设备的本地记录会被误判为“离线新增”。
+    await this._loadTombstones();
+
     // 1. 拉取并解密
     for (const stateKey of Object.keys(this.collMap)) {
       const snap = await getDocs(this._coll(stateKey));
       const remoteItems = [];
+      const staleRemoteIds = [];
       for (const d of snap.docs) {
         const data = d.data();
         try {
           if (data.iv && data.ct) {
             const pt = await this.Crypto.decrypt(this.cryptoKey, { iv: data.iv, ct: data.ct });
-            remoteItems.push(JSON.parse(pt));
+            const item = JSON.parse(pt);
+            if (this._isDeleted(stateKey, item.id)) staleRemoteIds.push(item.id);
+            else remoteItems.push(item);
           } else {
             delete data._syncedAt;
-            remoteItems.push(data);
+            if (this._isDeleted(stateKey, data.id)) staleRemoteIds.push(data.id);
+            else remoteItems.push(data);
           }
         } catch (err) {
           console.warn(`[Sync] 解密失败 ${stateKey}/${d.id}:`, err.message);
@@ -223,7 +356,7 @@ window.AmandaFirebase = {
 
       // 按 ID 合并 — 远端有的用远端版本,本地独有的(真正的离线编辑)保留并推送
       const remoteIds = new Set(remoteItems.map(i => i.id));
-      const localItems = A.State[stateKey] || [];
+      const localItems = this._filterDeleted(stateKey, A.State[stateKey]);
       let localOnly = localItems.filter(i => i.id && !remoteIds.has(i.id));
 
       // ❗ 防重复:如果云端已有数据,过滤掉"看起来像种子"的本地独有项
@@ -247,7 +380,8 @@ window.AmandaFirebase = {
         }
       }
 
-      if (remoteItems.length > 0 || localOnly.length > 0) {
+      const hasDeletes = (this._deletedIds[stateKey]?.size || 0) > 0;
+      if (remoteItems.length > 0 || localOnly.length > 0 || hasDeletes) {
         A.State[stateKey] = [...remoteItems, ...localOnly];
         A.Store.save(A.KEY[stateKey], A.State[stateKey]);
         console.info(`[Sync] 合并 ${stateKey}: 远端 ${remoteItems.length} + 本地独有 ${localOnly.length}`);
@@ -255,6 +389,12 @@ window.AmandaFirebase = {
         for (const item of localOnly) {
           try { await this._setEncrypted(stateKey, item); }
           catch (e) { console.warn(`[Sync] 推 ${stateKey}/${item.id} 失败:`, e.message); }
+        }
+
+        // 如果某台旧设备曾把已删除记录重新上传，看到墓碑后立即清理云端旧文档。
+        for (const id of staleRemoteIds) {
+          this._modules.deleteDoc(this._doc(stateKey, id))
+            .catch(e => console.warn(`[Sync] 清理已删除旧记录 ${stateKey}/${id} 失败:`, e.message));
         }
       } else if (localItems.length > 0) {
         // 远端为空 + 本地有数据 → 首次上传
@@ -266,7 +406,33 @@ window.AmandaFirebase = {
     }
     A.renderAll();
 
-    // 2. 订阅实时变更(per-change 元数据过滤,避免本地挂起写阻塞远端通知)
+    // 2. 先订阅删除墓碑。删除事件独立于原记录，离线设备不能覆盖它。
+    const unsubDeletes = onSnapshot(this._tombstonesColl(), async (snap) => {
+      let changed = 0;
+      for (const change of snap.docChanges()) {
+        if (change.type === 'removed' || change.doc.metadata.hasPendingWrites) continue;
+        const entry = await this._decodeTombstone(change.doc);
+        if (!entry?.stateKey || !entry?.id || !this.collMap[entry.stateKey]) continue;
+        this._rememberDeleted(entry.stateKey, entry.id);
+        const items = A.State[entry.stateKey] || [];
+        const filtered = items.filter(item => item.id !== entry.id);
+        if (filtered.length !== items.length) {
+          A.State[entry.stateKey] = filtered;
+          A.Store.save(A.KEY[entry.stateKey], filtered);
+          changed++;
+        }
+        this._modules.deleteDoc(this._doc(entry.stateKey, entry.id))
+          .catch(e => console.warn(`[Sync] 清理墓碑对应记录失败:`, e.message));
+      }
+      if (changed) {
+        A.captureSyncSnapshot?.();
+        A.renderAll();
+        this._showStatus(`☁ 已同步 ${changed} 条删除`, false);
+      }
+    }, (err) => console.error('[Sync] 订阅删除墓碑:', err));
+    this.unsubs.push(unsubDeletes);
+
+    // 3. 订阅实时数据变更(per-change 元数据过滤,避免本地挂起写阻塞远端通知)
     for (const stateKey of Object.keys(this.collMap)) {
       const unsub = onSnapshot(this._coll(stateKey), async (snap) => {
         this.applyingRemote = true;
@@ -285,6 +451,12 @@ window.AmandaFirebase = {
             const items = A.State[stateKey];
             const idx = items.findIndex(x => x.id === item.id);
             if (change.type === 'added' || change.type === 'modified') {
+              if (this._isDeleted(stateKey, item.id)) {
+                if (idx >= 0) { items.splice(idx, 1); changed++; }
+                this._modules.deleteDoc(this._doc(stateKey, item.id))
+                  .catch(e => console.warn(`[Sync] 清理复活记录 ${stateKey}/${item.id} 失败:`, e.message));
+                continue;
+              }
               // 仅当数据真的有差异时计变更(避免echo自己已有的数据)
               if (idx < 0) { items.push(item); changed++; }
               else if (JSON.stringify(items[idx]) !== JSON.stringify(item)) {
@@ -328,6 +500,7 @@ window.AmandaFirebase = {
   },
 
   async _setEncrypted(stateKey, item) {
+    if (this._isDeleted(stateKey, item.id)) return;
     const { setDoc } = this._modules;
     const { iv, ct } = await this.Crypto.encrypt(this.cryptoKey, JSON.stringify(item));
     // 把 dueAt(明文)单独留出来,供 Cloud Function 服务端按时间查询
@@ -367,12 +540,7 @@ window.AmandaFirebase = {
   },
 
   async deleteItem(stateKey, id) {
-    if (!this.ready || this.applyingRemote || !this._firstSyncDone) return;
-    this.pendingPushes++;
-    this._updateSyncIndicator();
-    try { await this._modules.deleteDoc(this._doc(stateKey, id)); }
-    catch (err) { console.error('[Sync] 删除失败:', err); }
-    finally { this.pendingPushes--; this._updateSyncIndicator(); }
+    return this.queueDelete(stateKey, id);
   },
 
   _updateSyncIndicator() {
@@ -402,6 +570,7 @@ window.AmandaFirebase = {
     this.unsubs.forEach(u => { try { u(); } catch {} });
     this.unsubs = []; this.ready = false;
     this.cryptoKey = null; this.userId = null;
+    this._deletedIds = Object.create(null);
   },
 
   /**

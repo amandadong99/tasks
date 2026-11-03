@@ -2,13 +2,13 @@
  * Service Worker - 离线缓存 + Push 推送接收
  * ===================================================================== */
 
-const CACHE_VERSION = 'amanda-tasks-v5.11.6-twinrider-sync';
+const CACHE_VERSION = 'amanda-tasks-v5.11.7-delete-tombstones';
 const CORE_FILES = [
   './',
   './index.html',
-  './app.css?v=5.11.6',
-  './app.js?v=5.11.6',
-  './firebase-config.js?v=5.11.6',
+  './app.css?v=5.11.7',
+  './app.js?v=5.11.7',
+  './firebase-config.js?v=5.11.7',
   './manifest.json',
   './icons/icon-192.png',
   './icons/icon-512.png',

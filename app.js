@@ -8,7 +8,7 @@
 'use strict';
 
 /* === 版本号(与 service-worker.js 的 CACHE_VERSION 保持一致)=== */
-const APP_VERSION = 'v5.11.6';
+const APP_VERSION = 'v5.11.7';
 const EMBED_MODE = new URLSearchParams(window.location.search).get('embed') || '';
 const EMBED_TRIP = EMBED_MODE === 'trip';
 const EMBED_SYNC = EMBED_MODE === 'sync';
@@ -528,24 +528,32 @@ function migrateTripTemplates() {
 }
 
 /* 持久化 + Firebase 同步 */
-const _syncSnapshot = { tasks: null, persons: null, trips: null, templates: null, notes: null, fuzzyPlans: null, exhibitions: null, salespeople: null };
+const _syncSnapshot = { tasks: null, persons: null, trips: null, templates: null, notes: null, fuzzyPlans: null, exhibitions: null, salespeople: null, visas: null };
 
 function captureSyncSnapshot() {
-  for (const k of ['tasks', 'persons', 'trips', 'templates', 'notes', 'fuzzyPlans', 'exhibitions', 'salespeople']) {
+  for (const k of ['tasks', 'persons', 'trips', 'templates', 'notes', 'fuzzyPlans', 'exhibitions', 'salespeople', 'visas']) {
     _syncSnapshot[k] = JSON.stringify(State[k]);
   }
 }
 
 function _syncToFirebase(stateKey) {
   const fb = window.AmandaFirebase;
-  if (!fb || !fb.ready || fb.applyingRemote || !fb._firstSyncDone) return;
-
   const newItems = State[stateKey];
   const newStr = JSON.stringify(newItems);
   if (_syncSnapshot[stateKey] === newStr) return;
 
   const oldItems = _syncSnapshot[stateKey] ? JSON.parse(_syncSnapshot[stateKey]) : [];
   const newIds = new Set(newItems.map(i => i.id));
+
+  // 删除必须先进入本地持久队列。即使 Firebase 尚未连接，也不能丢失删除意图；
+  // 后续联网时会写入独立墓碑，阻止离线设备把旧记录重新上传“复活”。
+  for (const old of oldItems) {
+    if (!newIds.has(old.id)) fb?.queueDelete?.(stateKey, old.id);
+  }
+
+  // 快照立即推进；删除已由 queueDelete 持久化，不依赖本次网络状态。
+  _syncSnapshot[stateKey] = newStr;
+  if (!fb || !fb.ready || fb.applyingRemote || !fb._firstSyncDone) return;
 
   // 新增/修改
   for (const item of newItems) {
@@ -554,12 +562,6 @@ function _syncToFirebase(stateKey) {
       fb.pushItem(stateKey, item);
     }
   }
-  // 删除
-  for (const old of oldItems) {
-    if (!newIds.has(old.id)) fb.deleteItem(stateKey, old.id);
-  }
-
-  _syncSnapshot[stateKey] = newStr;
 }
 
 function persistTasks() { Store.save(KEY.tasks, State.tasks); _syncToFirebase('tasks'); }
