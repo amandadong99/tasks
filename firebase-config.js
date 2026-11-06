@@ -47,11 +47,25 @@ window.AmandaFirebase = {
   userId: null,
   cryptoKey: null,
   unsubs: [],
-  applyingRemote: false,
   _modules: null,
   _firstSyncDone: false,
   _deletedIds: Object.create(null),
   DELETE_QUEUE_KEY: 'amanda.syncDeleteQueue.v1',
+  OUTBOX_KEY: 'amanda.syncOutbox.v1',
+  CLOCK_KEY: 'amanda.syncClock.v1',
+  DEVICE_KEY: 'amanda.syncDevice.v1',
+  SYNC_SCHEMA: 2,          // 云端文档的版本标记；没有它的文档来自未升级的设备
+  RETRY_MIN_MS: 5000,
+  RETRY_MAX_MS: 60000,
+  // 这些列表只会追加，两台设备同时写入时取并集，不互相覆盖
+  APPEND_ONLY_FIELDS: ['progressHistory', 'postponeHistory'],
+  _clock: null,
+  _deviceId: null,
+  _flushing: null,
+  _flushAgain: false,
+  _retryMs: 0,
+  _retryTimer: null,
+  _onlineBound: false,
   collMap: {
     tasks: 'tasks', persons: 'persons',
     trips: 'trips', templates: 'templates',
@@ -163,8 +177,8 @@ window.AmandaFirebase = {
       console.info(`[Sync] ✓ 已连接 (userId=${this.userId.slice(0,8)}...)`);
       await this.pullAndSubscribe();
       this._firstSyncDone = true;
-      await this.flushPendingDeletes();
-      window.AmandaTasks?.captureSyncSnapshot?.();
+      this._bindOnlineRetry();
+      await Promise.all([this.flushPendingDeletes(), this.flushOutbox()]);
       this._showStatus('已连接到云端,数据加密同步中', false);
       return { ok: true };
     } catch (err) {
@@ -319,6 +333,309 @@ window.AmandaFirebase = {
     }
   },
 
+  /* ============= 冲突合并:逐字段比较修改时间 =============
+   * 备注:不要动其他主程序内容,不要动登录系统。
+   *
+   * 每条记录带 _sync = { clock, fields: { 字段名: 修改时钟 } }，只有本机真正改过的
+   * 字段才会盖时钟。合并时每个字段取时钟较新的一边，所以“手机完成任务”和“电脑改备注”
+   * 互不覆盖，旧副本也无法把新状态改回去。
+   *
+   * 时钟是混合逻辑时钟(HLC)：毫秒时间.计数器.设备号。设备看到别人的时钟后，自己下一次
+   * 修改一定排在它后面，所以设备时间不准时，“看过之后再改”的顺序仍然正确；只有两台设备
+   * 互相没看到对方的修改、又改了同一字段时，才按时间判断。
+   */
+  _formatClock(ms, counter, device) {
+    return `${String(ms).padStart(15, '0')}.${String(counter).padStart(6, '0')}.${device}`;
+  },
+  _device() {
+    if (this._deviceId) return this._deviceId;
+    let id = localStorage.getItem(this.DEVICE_KEY);
+    if (!id) {
+      id = this.Crypto._b64u(crypto.getRandomValues(new Uint8Array(6)));
+      localStorage.setItem(this.DEVICE_KEY, id);
+    }
+    return (this._deviceId = id);
+  },
+  _loadClock() {
+    if (this._clock) return this._clock;
+    try { this._clock = JSON.parse(localStorage.getItem(this.CLOCK_KEY)); } catch {}
+    return (this._clock ||= { ms: 0, counter: 0 });
+  },
+  _observeClock(clock) {
+    if (!clock) return;
+    const [ms, counter] = clock.split('.').map(Number);
+    const current = this._loadClock();
+    if (ms > current.ms || (ms === current.ms && counter > current.counter)) {
+      this._clock = { ms, counter };
+    }
+  },
+  _nextClock() {
+    const current = this._loadClock();
+    const now = Date.now();
+    this._clock = now > current.ms
+      ? { ms: now, counter: 0 }
+      : { ms: current.ms, counter: current.counter + 1 };
+    try { localStorage.setItem(this.CLOCK_KEY, JSON.stringify(this._clock)); }
+    catch (err) { console.warn('[Sync] 保存时钟失败:', err.message); }
+    return this._formatClock(this._clock.ms, this._clock.counter, this._device());
+  },
+  _stable(value) {
+    if (Array.isArray(value)) return `[${value.map(v => this._stable(v)).join(',')}]`;
+    if (value && typeof value === 'object') {
+      return `{${Object.keys(value).sort()
+        .map(k => `${JSON.stringify(k)}:${this._stable(value[k])}`).join(',')}}`;
+    }
+    return value === undefined ? 'undefined' : JSON.stringify(value);
+  },
+
+  /**
+   * 合并同一条记录的本地版本和云端版本。
+   * legacyClock 不为 null 时，云端版本来自未升级的设备：它没有逐字段时钟，
+   * 所有字段都按它的写入时间算；本地从未改过的字段仍然跟随云端，与旧版行为一致。
+   * 返回 localChanged（本地要更新）和 remoteBehind（云端缺本地的修改，要上传）。
+   */
+  mergeItems(local, remote, legacyClock = null) {
+    const isLegacy = legacyClock !== null;
+    const localFields = local._sync?.fields || {};
+    const remoteFields = remote._sync?.fields || {};
+    const keys = new Set([...Object.keys(local), ...Object.keys(remote),
+      ...Object.keys(localFields), ...Object.keys(remoteFields)]);
+    keys.delete('_sync');
+
+    const item = {};
+    const fields = {};
+    let localChanged = false;
+    let remoteBehind = false;
+    const put = (key, value, clock) => {
+      if (value !== undefined) item[key] = value;
+      if (clock) fields[key] = clock;
+    };
+
+    for (const key of keys) {
+      const lv = local[key];
+      const rv = remote[key];
+      const lc = localFields[key] || '';
+      const rc = isLegacy ? legacyClock : (remoteFields[key] || '');
+      let same = this._stable(lv) === this._stable(rv);
+
+      if (!same && !isLegacy && lc && rc && this.APPEND_ONLY_FIELDS.includes(key) &&
+          Array.isArray(lv) && Array.isArray(rv)) {
+        const inLocal = new Set(lv.map(v => this._stable(v)));
+        const inRemote = new Set(rv.map(v => this._stable(v)));
+        const onlyRemote = rv.filter(v => !inLocal.has(this._stable(v)));
+        const onlyLocal = lv.filter(v => !inRemote.has(this._stable(v)));
+        if (onlyRemote.length || onlyLocal.length) {
+          if (onlyRemote.length) localChanged = true;
+          if (onlyLocal.length) remoteBehind = true;
+          put(key, rc > lc ? [...rv, ...onlyLocal] : [...lv, ...onlyRemote], rc > lc ? rc : lc);
+          continue;
+        }
+        same = true;   // 内容相同只是顺序不同
+      }
+
+      if (same) {
+        if (isLegacy) { put(key, lv, lc); continue; }
+        if (lc > rc) remoteBehind = true;
+        else if (rc > lc) localChanged = true;
+        put(key, lv, lc > rc ? lc : rc);
+      } else if (lc > rc) {
+        remoteBehind = true;
+        put(key, lv, lc);
+      } else if (rc > lc) {
+        localChanged = true;
+        put(key, rv, isLegacy && !lc ? '' : rc);
+      } else if (!lc || this._stable(rv) > this._stable(lv)) {
+        // 双方都没有时钟时跟随云端（旧数据的既有行为）；时钟相同时结果也要确定，
+        // 这样不管哪台设备先合并，最后都收敛到同一个值。
+        localChanged = true;
+        put(key, rv, rc);
+      } else {
+        remoteBehind = true;
+        put(key, lv, lc);
+      }
+    }
+
+    const clocks = [local._sync?.clock || '', remote._sync?.clock || '', ...Object.values(fields)];
+    const clock = clocks.reduce((a, b) => (a > b ? a : b), '');
+    if (clock) item._sync = { clock, fields };
+    return { item, localChanged, remoteBehind };
+  },
+
+  /**
+   * 给本机真正改过的字段盖时钟，并写入持久发件箱。
+   * 不管当时是否联网、是否已连上云端都先记下来，修改不会因为时机不对而丢失。
+   */
+  recordLocalChanges(stateKey, oldItems, newItems) {
+    const oldById = new Map((oldItems || []).map(item => [item.id, item]));
+    let clock = null;
+    for (const item of newItems || []) {
+      if (!item?.id) continue;
+      const old = oldById.get(item.id);
+      if (!old) {
+        // 新记录（或复制出来的记录）不继承别的记录的时钟
+        clock ||= this._nextClock();
+        item._sync = { clock, fields: {} };
+        this._queuePush(stateKey, item.id);
+        continue;
+      }
+      const keys = new Set([...Object.keys(old), ...Object.keys(item)]);
+      keys.delete('_sync');
+      const changed = [...keys].filter(k => this._stable(old[k]) !== this._stable(item[k]));
+      if (!changed.length) continue;
+      clock ||= this._nextClock();
+      const fields = { ...(old._sync?.fields || {}) };
+      for (const key of changed) fields[key] = clock;
+      item._sync = { clock, fields };
+      this._queuePush(stateKey, item.id);
+    }
+    if (clock) this.flushOutbox().catch(err => console.warn('[Sync] 上传失败:', err.message));
+  },
+
+  /* ============= 持久发件箱 =============
+   * localStorage 只记“哪条记录待上传”，内容以当时的本地状态为准。
+   * 只有事务提交成功才出队，失败、断网、App 被杀后都会继续重试。
+   */
+  _allOutbox() {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(this.OUTBOX_KEY) || '[]');
+      return Array.isArray(parsed) ? parsed.filter(x => x && x.stateKey && x.id) : [];
+    } catch { return []; }
+  },
+  _sameOutboxEntry(entry, stateKey, id) {
+    return entry.stateKey === stateKey && entry.id === id &&
+      (!entry.userId || !this.userId || entry.userId === this.userId);
+  },
+  _pendingOutbox() {
+    return this._allOutbox().filter(x =>
+      !x.userId || !this.userId || x.userId === this.userId);
+  },
+  _saveOutbox(items) {
+    try { localStorage.setItem(this.OUTBOX_KEY, JSON.stringify(items)); }
+    catch (err) { console.warn('[Sync] 保存发件箱失败:', err.message); }
+  },
+  _queuePush(stateKey, id) {
+    const items = this._allOutbox();
+    const entry = items.find(x => this._sameOutboxEntry(x, stateKey, id));
+    if (entry) entry.seq = (entry.seq || 0) + 1;
+    else items.push({ stateKey, id, seq: 1, userId: this.userId || null, queuedAt: Date.now() });
+    this._saveOutbox(items);
+  },
+  _dequeuePush(entry) {
+    // seq 变了说明上传期间又有新修改，要留在队列里再传一次
+    this._saveOutbox(this._allOutbox().filter(x =>
+      !(this._sameOutboxEntry(x, entry.stateKey, entry.id) && x.seq === entry.seq)));
+  },
+  _isPendingPush(stateKey, id) {
+    return this._allOutbox().some(x => this._sameOutboxEntry(x, stateKey, id));
+  },
+
+  async flushOutbox() {
+    if (!this.ready || !this._firstSyncDone) return;
+    if (this._flushing) { this._flushAgain = true; return this._flushing; }
+    this._flushing = this._drainOutbox().finally(() => { this._flushing = null; });
+    return this._flushing;
+  },
+  async _drainOutbox() {
+    let failed;
+    do {
+      this._flushAgain = false;
+      failed = false;
+      for (const entry of this._pendingOutbox()) {
+        // 系统已报告断网就不逐条等事务超时，队列原样留着，联网后再传
+        if (typeof navigator !== 'undefined' && navigator.onLine === false) { failed = true; break; }
+        if (!(await this._commitPush(entry))) failed = true;
+      }
+    } while (this._flushAgain && !failed);
+
+    clearTimeout(this._retryTimer);
+    if (!failed) { this._retryMs = 0; return; }
+    this._retryMs = Math.min((this._retryMs || this.RETRY_MIN_MS / 2) * 2, this.RETRY_MAX_MS);
+    this._retryTimer = setTimeout(() => this.flushOutbox().catch(() => {}), this._retryMs);
+    this._retryTimer?.unref?.();
+  },
+  _bindOnlineRetry() {
+    if (this._onlineBound || typeof window.addEventListener !== 'function') return;
+    this._onlineBound = true;
+    window.addEventListener('online', () => this.flushOutbox().catch(() => {}));
+  },
+
+  /**
+   * 用事务“读云端 → 合并 → 写回”。任何设备都不再盲目整条覆盖，
+   * 所以就算这台设备手里是旧副本，也不会把云端已有的新修改冲掉。
+   */
+  async _commitPush(entry) {
+    const { stateKey, id } = entry;
+    const A = window.AmandaTasks;
+    const localItem = () => A?.State?.[stateKey]?.find(x => x.id === id);
+    if (!localItem() || this._isDeleted(stateKey, id)) { this._dequeuePush(entry); return true; }
+
+    this.pendingPushes++;
+    this._updateSyncIndicator();
+    try {
+      const ref = this._doc(stateKey, id);
+      const tombstoneRef = this._tombstoneDoc(stateKey, id);
+      const outcome = await this._modules.runTransaction(this.db, async (tx) => {
+        if ((await tx.get(tombstoneRef)).exists()) return 'deleted';
+        const snap = await tx.get(ref);
+        let item = localItem();
+        if (!item) return 'gone';
+        if (snap.exists()) {
+          const remote = await this._decodeDoc(snap.data(), `${stateKey}/${id}`);
+          if (remote) item = this.mergeItems(item, remote.item, remote.legacyClock).item;
+        }
+        tx.set(ref, await this._encodeDoc(stateKey, item));
+        return 'written';
+      });
+      if (outcome === 'deleted') {
+        this._rememberDeleted(stateKey, id);
+        this._removeLocal(stateKey, id);
+      }
+      this._dequeuePush(entry);
+      return true;
+    } catch (err) {
+      console.warn(`[Sync] 上传 ${stateKey}/${id} 失败,已保留重试:`, err.message);
+      return false;
+    } finally {
+      this.pendingPushes--;
+      this._updateSyncIndicator();
+    }
+  },
+
+  /** 从本地移除一条已在别处删除的记录。同一个同步步骤内完成，不留半更新状态。 */
+  _removeLocal(stateKey, id) {
+    const A = window.AmandaTasks;
+    A.stampLocalChanges?.(stateKey);
+    const items = A.State[stateKey] || [];
+    const filtered = items.filter(item => item.id !== id);
+    if (filtered.length === items.length) return false;
+    A.State[stateKey] = filtered;
+    A.Store.save(A.KEY[stateKey], filtered);
+    A.captureSyncSnapshot?.(stateKey);
+    A.renderAll();
+    return true;
+  },
+
+  async _decodeDoc(data, label) {
+    try {
+      let item;
+      if (data.iv && data.ct) {
+        item = JSON.parse(await this.Crypto.decrypt(this.cryptoKey, { iv: data.iv, ct: data.ct }));
+      } else {
+        item = { ...data };
+        delete item._syncedAt;
+        delete item._schema;
+      }
+      if (data._schema === this.SYNC_SCHEMA) return { item, legacyClock: null };
+      // 未升级的设备会把读到的 _sync 原样写回，那份时钟已经不代表内容，不能采信
+      delete item._sync;
+      const legacyClock = data._syncedAt ? this._formatClock(data._syncedAt, 0, 'legacy') : '';
+      return { item, legacyClock };
+    } catch (err) {
+      console.warn(`[Sync] 解密失败 ${label}:`, err.message);
+      return null;
+    }
+  },
+
   async pullAndSubscribe() {
     const { getDocs, onSnapshot, waitForPendingWrites } = this._modules;
     const A = window.AmandaTasks;
@@ -334,29 +651,29 @@ window.AmandaFirebase = {
     // 1. 拉取并解密
     for (const stateKey of Object.keys(this.collMap)) {
       const snap = await getDocs(this._coll(stateKey));
-      const remoteItems = [];
+      const remoteDocs = [];
       const staleRemoteIds = [];
       for (const d of snap.docs) {
-        const data = d.data();
-        try {
-          if (data.iv && data.ct) {
-            const pt = await this.Crypto.decrypt(this.cryptoKey, { iv: data.iv, ct: data.ct });
-            const item = JSON.parse(pt);
-            if (this._isDeleted(stateKey, item.id)) staleRemoteIds.push(item.id);
-            else remoteItems.push(item);
-          } else {
-            delete data._syncedAt;
-            if (this._isDeleted(stateKey, data.id)) staleRemoteIds.push(data.id);
-            else remoteItems.push(data);
-          }
-        } catch (err) {
-          console.warn(`[Sync] 解密失败 ${stateKey}/${d.id}:`, err.message);
-        }
+        const decoded = await this._decodeDoc(d.data(), `${stateKey}/${d.id}`);
+        if (!decoded) continue;
+        this._observeClock(decoded.legacyClock || decoded.item._sync?.clock);
+        if (this._isDeleted(stateKey, decoded.item.id)) staleRemoteIds.push(decoded.item.id);
+        else remoteDocs.push(decoded);
       }
 
-      // 按 ID 合并 — 远端有的用远端版本,本地独有的(真正的离线编辑)保留并推送
-      const remoteIds = new Set(remoteItems.map(i => i.id));
+      // 下面到写回 State 之间没有 await：先把连接期间的本地修改盖好时钟，
+      // 再逐条合并，较新的修改胜出；云端缺的修改进发件箱，不丢本地未上传的内容。
+      A.stampLocalChanges?.(stateKey);
       const localItems = this._filterDeleted(stateKey, A.State[stateKey]);
+      const localById = new Map(localItems.map(item => [item.id, item]));
+      const remoteItems = remoteDocs.map(({ item, legacyClock }) => {
+        const local = localById.get(item.id);
+        if (!local) return item;
+        const merged = this.mergeItems(local, item, legacyClock);
+        if (merged.remoteBehind) this._queuePush(stateKey, item.id);
+        return merged.item;
+      });
+      const remoteIds = new Set(remoteItems.map(i => i.id));
       let localOnly = localItems.filter(i => i.id && !remoteIds.has(i.id));
 
       // ❗ 防重复:如果云端已有数据,过滤掉"看起来像种子"的本地独有项
@@ -386,10 +703,7 @@ window.AmandaFirebase = {
         A.Store.save(A.KEY[stateKey], A.State[stateKey]);
         console.info(`[Sync] 合并 ${stateKey}: 远端 ${remoteItems.length} + 本地独有 ${localOnly.length}`);
 
-        for (const item of localOnly) {
-          try { await this._setEncrypted(stateKey, item); }
-          catch (e) { console.warn(`[Sync] 推 ${stateKey}/${item.id} 失败:`, e.message); }
-        }
+        for (const item of localOnly) this._queuePush(stateKey, item.id);
 
         // 如果某台旧设备曾把已删除记录重新上传，看到墓碑后立即清理云端旧文档。
         for (const id of staleRemoteIds) {
@@ -398,11 +712,12 @@ window.AmandaFirebase = {
         }
       } else if (localItems.length > 0) {
         // 远端为空 + 本地有数据 → 首次上传
-        for (const item of localItems) {
-          try { await this._setEncrypted(stateKey, item); } catch {}
-        }
+        for (const item of localItems) this._queuePush(stateKey, item.id);
         console.info(`[Sync] 首次上传 ${stateKey}: ${localItems.length}`);
       }
+      // 这一类的本地状态已与云端合并。立刻更新基线，之后的用户操作才不会把
+      // 云端带来的内容误判成本机修改。
+      A.captureSyncSnapshot?.(stateKey);
     }
     A.renderAll();
 
@@ -414,73 +729,78 @@ window.AmandaFirebase = {
         const entry = await this._decodeTombstone(change.doc);
         if (!entry?.stateKey || !entry?.id || !this.collMap[entry.stateKey]) continue;
         this._rememberDeleted(entry.stateKey, entry.id);
-        const items = A.State[entry.stateKey] || [];
-        const filtered = items.filter(item => item.id !== entry.id);
-        if (filtered.length !== items.length) {
-          A.State[entry.stateKey] = filtered;
-          A.Store.save(A.KEY[entry.stateKey], filtered);
-          changed++;
-        }
+        if (this._removeLocal(entry.stateKey, entry.id)) changed++;
         this._modules.deleteDoc(this._doc(entry.stateKey, entry.id))
           .catch(e => console.warn(`[Sync] 清理墓碑对应记录失败:`, e.message));
       }
-      if (changed) {
-        A.captureSyncSnapshot?.();
-        A.renderAll();
-        this._showStatus(`☁ 已同步 ${changed} 条删除`, false);
-      }
+      if (changed) this._showStatus(`☁ 已同步 ${changed} 条删除`, false);
     }, (err) => console.error('[Sync] 订阅删除墓碑:', err));
     this.unsubs.push(unsubDeletes);
 
     // 3. 订阅实时数据变更(per-change 元数据过滤,避免本地挂起写阻塞远端通知)
     for (const stateKey of Object.keys(this.collMap)) {
       const unsub = onSnapshot(this._coll(stateKey), async (snap) => {
-        this.applyingRemote = true;
-        try {
-          let changed = 0;
-          for (const change of snap.docChanges()) {
-            // 跳过本地刚发出还没server确认的回声(per-change 判断)
-            if (change.doc.metadata.hasPendingWrites) continue;
-            const data = change.doc.data();
-            let item = null;
-            if (data.iv && data.ct) {
-              try { item = JSON.parse(await this.Crypto.decrypt(this.cryptoKey, { iv: data.iv, ct: data.ct })); }
-              catch { continue; }
-            } else { delete data._syncedAt; item = data; }
-            if (!item) continue;
-            const items = A.State[stateKey];
-            const idx = items.findIndex(x => x.id === item.id);
-            if (change.type === 'added' || change.type === 'modified') {
-              if (this._isDeleted(stateKey, item.id)) {
-                if (idx >= 0) { items.splice(idx, 1); changed++; }
-                this._modules.deleteDoc(this._doc(stateKey, item.id))
-                  .catch(e => console.warn(`[Sync] 清理复活记录 ${stateKey}/${item.id} 失败:`, e.message));
-                continue;
-              }
-              // 仅当数据真的有差异时计变更(避免echo自己已有的数据)
-              if (idx < 0) { items.push(item); changed++; }
-              else if (JSON.stringify(items[idx]) !== JSON.stringify(item)) {
-                items[idx] = item; changed++;
-              }
-            } else if (change.type === 'removed') {
-              if (idx >= 0) { items.splice(idx, 1); changed++; }
-            }
+        // 先解密完，再一次性应用。解密期间用户可能在操作，不能留下半更新的状态。
+        const changes = [];
+        for (const change of snap.docChanges()) {
+          // 跳过本地刚发出还没server确认的回声(per-change 判断)
+          if (change.doc.metadata.hasPendingWrites) continue;
+          if (change.type === 'removed') {
+            changes.push({ removedId: change.doc.id });
+            continue;
           }
-          if (changed) {
-            A.Store.save(A.KEY[stateKey], A.State[stateKey]);
-            A.captureSyncSnapshot?.();
-            A.renderAll();
-            console.info(`[Sync] 远端变更 ${stateKey}: ${changed} 条`);
-            this._showStatus(`☁ 已同步 ${changed} 条远端变更`, false);
-          }
-        } finally { this.applyingRemote = false; }
+          const decoded = await this._decodeDoc(change.doc.data(), `${stateKey}/${change.doc.id}`);
+          if (decoded) changes.push(decoded);
+        }
+        const changed = this._applyRemoteChanges(stateKey, changes);
+        if (changed) {
+          console.info(`[Sync] 远端变更 ${stateKey}: ${changed} 条`);
+          this._showStatus(`☁ 已同步 ${changed} 条远端变更`, false);
+        }
       }, (err) => console.error(`[Sync] 订阅 ${stateKey}:`, err));
       this.unsubs.push(unsub);
     }
   },
 
+  /** 把一批已解密的远端变更合并进本地。全程同步执行，用户的点击不会插进来。 */
+  _applyRemoteChanges(stateKey, changes) {
+    const A = window.AmandaTasks;
+    if (!changes.length) return 0;
+    A.stampLocalChanges?.(stateKey);
+    const items = A.State[stateKey];
+    let changed = 0;
+    let needsPush = false;
+    for (const { item, legacyClock, removedId } of changes) {
+      if (removedId) {
+        const idx = items.findIndex(x => x.id === removedId);
+        // 还有未上传的修改时先保留：上传事务会看墓碑，真删除会在那里生效
+        if (idx >= 0 && !this._isPendingPush(stateKey, removedId)) { items.splice(idx, 1); changed++; }
+        continue;
+      }
+      this._observeClock(legacyClock || item._sync?.clock);
+      const idx = items.findIndex(x => x.id === item.id);
+      if (this._isDeleted(stateKey, item.id)) {
+        if (idx >= 0) { items.splice(idx, 1); changed++; }
+        this._modules.deleteDoc(this._doc(stateKey, item.id))
+          .catch(e => console.warn(`[Sync] 清理复活记录 ${stateKey}/${item.id} 失败:`, e.message));
+        continue;
+      }
+      if (idx < 0) { items.push(item); changed++; continue; }
+      const merged = this.mergeItems(items[idx], item, legacyClock);
+      if (merged.localChanged) { items[idx] = merged.item; changed++; }
+      if (merged.remoteBehind) { this._queuePush(stateKey, item.id); needsPush = true; }
+    }
+    if (changed) {
+      A.Store.save(A.KEY[stateKey], items);
+      A.captureSyncSnapshot?.(stateKey);
+      A.renderAll();
+    }
+    if (needsPush) this.flushOutbox().catch(() => {});
+    return changed;
+  },
+
   /** 手动刷新(切回前台/点设置里"立即刷新"用)
-   * 关键安全保证:先 waitForPendingWrites 把本地排队的写入全部冲到服务器,
+   * 关键安全保证:先上传发件箱,再 waitForPendingWrites 把本地排队的写入全部冲到服务器,
    * 然后才让 onSnapshot 自然处理远端变更,**不再做粗暴的 pull-and-replace**。
    * 这样杜绝了"本地未同步的修改被云端旧数据覆盖"的数据丢失场景。
    */
@@ -488,24 +808,25 @@ window.AmandaFirebase = {
     if (!this.ready) return { ok: false };
     const { waitForPendingWrites } = this._modules;
     try {
+      await this.flushOutbox();
       await waitForPendingWrites(this.db);
       // onSnapshot 已经在后台运行,会自动把任何远端变更带过来
       // 我们只触发一次重渲染,确保 UI 反映最新状态
       window.AmandaTasks?.renderAll();
-      return { ok: true, changed: 0, msg: '已同步,本地变更已上传' };
+      const pending = this._pendingOutbox().length;
+      return { ok: true, changed: 0, pending,
+        msg: pending ? `还有 ${pending} 条修改待上传` : '已同步,本地变更已上传' };
     } catch (err) {
       console.warn('[Sync] waitForPendingWrites 失败:', err.message);
       return { ok: false, reason: 'wait-failed', error: err };
     }
   },
 
-  async _setEncrypted(stateKey, item) {
-    if (this._isDeleted(stateKey, item.id)) return;
-    const { setDoc } = this._modules;
+  async _encodeDoc(stateKey, item) {
     const { iv, ct } = await this.Crypto.encrypt(this.cryptoKey, JSON.stringify(item));
     // 把 dueAt(明文)单独留出来,供 Cloud Function 服务端按时间查询
     // 服务端只能看到何时有任务,看不到任务内容(标题/客户名/备注仍加密)
-    const doc = { iv, ct, _syncedAt: Date.now() };
+    const doc = { iv, ct, _syncedAt: Date.now(), _schema: this.SYNC_SCHEMA };
     if (stateKey === 'tasks') {
       if (item.dueAt) {
         doc.dueAt = item.dueAt;
@@ -525,19 +846,10 @@ window.AmandaFirebase = {
         doc.nextReminderAtTs = new Date(item.nextReminderAt).getTime();
       }
     }
-    await setDoc(this._doc(stateKey, item.id), doc);
+    return doc;
   },
 
   pendingPushes: 0,
-
-  async pushItem(stateKey, item) {
-    if (!this.ready || this.applyingRemote || !this._firstSyncDone) return;
-    this.pendingPushes++;
-    this._updateSyncIndicator();
-    try { await this._setEncrypted(stateKey, item); }
-    catch (err) { console.error('[Sync] 写入失败:', err); }
-    finally { this.pendingPushes--; this._updateSyncIndicator(); }
-  },
 
   async deleteItem(stateKey, id) {
     return this.queueDelete(stateKey, id);
@@ -551,8 +863,12 @@ window.AmandaFirebase = {
       el.id = 'sync-indicator';
       document.body && document.body.appendChild(el);
     }
+    const waiting = this._pendingOutbox().length;
     if (this.pendingPushes > 0) {
       el.textContent = `⏳ 保存中… (${this.pendingPushes})`;
+      el.className = 'syncing';
+    } else if (waiting > 0) {
+      el.textContent = `⏳ 待上传 (${waiting})`;
       el.className = 'syncing';
     } else {
       el.textContent = '✓ 已同步';
@@ -569,6 +885,7 @@ window.AmandaFirebase = {
   shutdown() {
     this.unsubs.forEach(u => { try { u(); } catch {} });
     this.unsubs = []; this.ready = false;
+    clearTimeout(this._retryTimer);
     this.cryptoKey = null; this.userId = null;
     this._deletedIds = Object.create(null);
   },

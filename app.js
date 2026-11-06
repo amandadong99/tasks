@@ -8,7 +8,7 @@
 'use strict';
 
 /* === 版本号(与 service-worker.js 的 CACHE_VERSION 保持一致)=== */
-const APP_VERSION = 'v5.11.7';
+const APP_VERSION = 'v5.11.8';
 const EMBED_MODE = new URLSearchParams(window.location.search).get('embed') || '';
 const EMBED_TRIP = EMBED_MODE === 'trip';
 const EMBED_SYNC = EMBED_MODE === 'sync';
@@ -530,19 +530,28 @@ function migrateTripTemplates() {
 /* 持久化 + Firebase 同步 */
 const _syncSnapshot = { tasks: null, persons: null, trips: null, templates: null, notes: null, fuzzyPlans: null, exhibitions: null, salespeople: null, visas: null };
 
-function captureSyncSnapshot() {
-  for (const k of ['tasks', 'persons', 'trips', 'templates', 'notes', 'fuzzyPlans', 'exhibitions', 'salespeople', 'visas']) {
+function captureSyncSnapshot(stateKey) {
+  const keys = stateKey ? [stateKey] : ['tasks', 'persons', 'trips', 'templates', 'notes', 'fuzzyPlans', 'exhibitions', 'salespeople', 'visas'];
+  for (const k of keys) {
     _syncSnapshot[k] = JSON.stringify(State[k]);
   }
 }
 
-function _syncToFirebase(stateKey) {
+/**
+ * 把内存里相对上次基线的差异登记为本机修改：删除进删除队列，新增/修改盖时钟并进发件箱。
+ * 这里不判断是否已连上云端，修改一律先持久化，由 firebase-config.js 负责上传和重试。
+ * 备注：不要动其他主程序内容，不要动登录系统。
+ */
+function stampLocalChanges(stateKey) {
   const fb = window.AmandaFirebase;
   const newItems = State[stateKey];
   const newStr = JSON.stringify(newItems);
-  if (_syncSnapshot[stateKey] === newStr) return;
+  const baseline = _syncSnapshot[stateKey];
+  if (baseline === newStr) return;
+  // 启动迁移发生在建立基线之前，没有基线就无从判断哪些是用户修改
+  if (baseline === null) { _syncSnapshot[stateKey] = newStr; return; }
 
-  const oldItems = _syncSnapshot[stateKey] ? JSON.parse(_syncSnapshot[stateKey]) : [];
+  const oldItems = JSON.parse(baseline);
   const newIds = new Set(newItems.map(i => i.id));
 
   // 删除必须先进入本地持久队列。即使 Firebase 尚未连接，也不能丢失删除意图；
@@ -551,28 +560,20 @@ function _syncToFirebase(stateKey) {
     if (!newIds.has(old.id)) fb?.queueDelete?.(stateKey, old.id);
   }
 
-  // 快照立即推进；删除已由 queueDelete 持久化，不依赖本次网络状态。
-  _syncSnapshot[stateKey] = newStr;
-  if (!fb || !fb.ready || fb.applyingRemote || !fb._firstSyncDone) return;
-
-  // 新增/修改
-  for (const item of newItems) {
-    const old = oldItems.find(o => o.id === item.id);
-    if (!old || JSON.stringify(old) !== JSON.stringify(item)) {
-      fb.pushItem(stateKey, item);
-    }
-  }
+  fb?.recordLocalChanges?.(stateKey, oldItems, newItems);
+  _syncSnapshot[stateKey] = JSON.stringify(newItems);
+  Store.save(KEY[stateKey], newItems);   // 时钟也要落盘
 }
 
-function persistTasks() { Store.save(KEY.tasks, State.tasks); _syncToFirebase('tasks'); }
-function persistPersons() { Store.save(KEY.persons, State.persons); _syncToFirebase('persons'); }
-function persistTrips() { Store.save(KEY.trips, State.trips); _syncToFirebase('trips'); }
-function persistTemplates() { Store.save(KEY.templates, State.templates); _syncToFirebase('templates'); }
-function persistNotes() { Store.save(KEY.notes, State.notes); _syncToFirebase('notes'); }
-function persistFuzzyPlans() { Store.save(KEY.fuzzyPlans, State.fuzzyPlans); _syncToFirebase('fuzzyPlans'); }
-function persistExhibitions() { Store.save(KEY.exhibitions, State.exhibitions); _syncToFirebase('exhibitions'); }
-function persistSalespeople() { Store.save(KEY.salespeople, State.salespeople); _syncToFirebase('salespeople'); }
-function persistVisas() { Store.save(KEY.visas, State.visas); _syncToFirebase('visas'); }
+function persistTasks() { Store.save(KEY.tasks, State.tasks); stampLocalChanges('tasks'); }
+function persistPersons() { Store.save(KEY.persons, State.persons); stampLocalChanges('persons'); }
+function persistTrips() { Store.save(KEY.trips, State.trips); stampLocalChanges('trips'); }
+function persistTemplates() { Store.save(KEY.templates, State.templates); stampLocalChanges('templates'); }
+function persistNotes() { Store.save(KEY.notes, State.notes); stampLocalChanges('notes'); }
+function persistFuzzyPlans() { Store.save(KEY.fuzzyPlans, State.fuzzyPlans); stampLocalChanges('fuzzyPlans'); }
+function persistExhibitions() { Store.save(KEY.exhibitions, State.exhibitions); stampLocalChanges('exhibitions'); }
+function persistSalespeople() { Store.save(KEY.salespeople, State.salespeople); stampLocalChanges('salespeople'); }
+function persistVisas() { Store.save(KEY.visas, State.visas); stampLocalChanges('visas'); }
 
 /* ---------------------------------------------------------------------
  * 4. 业务逻辑工具
@@ -2727,15 +2728,17 @@ function openTripModal(existing) {
         if (!trip.name || !trip.departureDate || !trip.returnDate) {
           toast('请填写名称与日期'); return;
         }
+        let previousTasks = [];
         if (existing) {
-          // 简化:删除旧的派生任务,重新派生
+          // 重新派生;同名子任务沿用原记录,已完成状态和进度不被重置
+          previousTasks = State.tasks.filter(x => x.linkedTripId === trip.id);
           State.tasks = State.tasks.filter(x => x.linkedTripId !== trip.id);
           const idx = State.trips.findIndex(x => x.id === trip.id);
           if (idx >= 0) State.trips[idx] = trip;
         } else {
           State.trips.push(trip);
         }
-        deriveTripTasks(trip);
+        deriveTripTasks(trip, previousTasks);
         persistTrips(); persistTasks();
         closeModal();
         renderAll();
@@ -2934,14 +2937,21 @@ function openVisaModal(existing, defaultType) {
   });
 }
 
-function deriveTripTasks(trip) {
+function deriveTripTasks(trip, previousTasks = []) {
   const tpl = State.templates.find(x => x.id === trip.templateId);
   if (!tpl) { trip.relatedTaskIds = []; return; }  // 模板选「无」:不派生
   const today = todayISO();
+  const reusable = [...previousTasks];
   const newTasks = tpl.tasks.map(item => {
     let dueDate;
     if (item.daysBeforeDeparture >= 0) dueDate = addDays(trip.departureDate, -item.daysBeforeDeparture);
     else dueDate = addDays(trip.returnDate, -item.daysBeforeDeparture);
+    // 编辑行程时同名子任务沿用原记录:保留完成状态和进度,手动延期过的日期也不动
+    const prevIdx = reusable.findIndex(t => t.title === item.title && t._tripStage === item.stage);
+    if (prevIdx >= 0) {
+      const prev = reusable.splice(prevIdx, 1)[0];
+      return { ...prev, dueDate: prev.postponeCount ? prev.dueDate : dueDate };
+    }
     return {
       id: uuid(),
       title: item.title,
@@ -4105,7 +4115,8 @@ function openSettings() {
     try {
       const r = await window.AmandaFirebase.refresh();
       if (r.ok) {
-        toast(r.changed > 0 ? `已同步 ${r.changed} 类变更` : '已是最新');
+        toast(r.pending > 0 ? `还有 ${r.pending} 条修改待上传,联网后自动重试`
+          : r.changed > 0 ? `已同步 ${r.changed} 类变更` : '已是最新');
       } else {
         toast('刷新失败');
       }
