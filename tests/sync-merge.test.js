@@ -119,3 +119,89 @@ test('editing a trip keeps completed subtasks instead of resetting them', () => 
   assert.deepEqual([added.id, added.status], ['new-id', '进行中']);
   assert.deepEqual(plain(trip.relatedTaskIds), ['kept', 'moved', 'new-id']);
 });
+
+test('the real app exposes stampLocalChanges to the sync layer', () => {
+  // 测试夹具自己拼 AmandaTasks，所以要单独核对线上代码真的把它暴露出去
+  const source = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
+  const exposed = source.match(/window\.AmandaTasks = \{([^}]*)\}/)[1];
+  assert.match(exposed, /\bstampLocalChanges\b/);
+});
+
+function loadVisaCode(tasks) {
+  const source = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
+  const start = source.indexOf('const VISA_NODES');
+  const end = source.indexOf('function openVisaModal(');
+  let nextId = 0;
+  const context = vm.createContext({
+    State: { tasks, visas: [] },
+    todayISO: () => '2026-11-06',
+    addDays: (date, days) => new Date(Date.parse(date) + days * 86400000).toISOString().slice(0, 10),
+    daysBetween: (a, b) => Math.round((Date.parse(b) - Date.parse(a)) / 86400000),
+    uuid: () => `new-${++nextId}`,
+  });
+  vm.runInContext(source.slice(start, end), context);
+  return context;
+}
+
+const visa = (extra = {}) => ({
+  id: 'v1', docType: '签证', country: '美国', visaType: 'B1', expiryDate: '2027-12-31', ...extra,
+});
+
+test('editing a visa without changing its expiry keeps its tasks and their completion', () => {
+  const context = loadVisaCode([]);
+  const before = visa();
+  context.deriveVisaTasks(before);
+  const [first, second] = context.State.tasks;
+  first.status = '已完成';
+  second.postponeCount = 1;
+  second.dueDate = '2027-11-20';
+  const ids = plain(context.State.tasks).map(t => t.id);
+
+  const created = context.applyVisaEdit(before, visa({ country: '加拿大', notes: 'x' }));
+
+  const after = plain(context.State.tasks);
+  assert.equal(created, 0);
+  assert.deepEqual(after.map(t => t.id), ids);
+  assert.equal(after[0].status, '已完成');
+  assert.equal(after[1].dueDate, '2027-11-20');
+  assert.ok(after.every(t => t.title.includes('加拿大') && !t.title.includes('美国')));
+});
+
+test('a visa task whose date has passed is not silently dropped by a later edit', () => {
+  const context = loadVisaCode([]);
+  const before = visa({ expiryDate: '2026-12-20' });
+  context.State.tasks.push(
+    { id: 'old', title: '重新办理签证:美国 B1(2026-12-20 到期)· 提前90天',
+      linkedVisaId: 'v1', status: '已完成', dueDate: '2026-09-21' },
+    { id: 'open', title: '重新办理签证:美国 B1(2026-12-20 到期)· 提前60天',
+      linkedVisaId: 'v1', status: '进行中', dueDate: '2026-10-21' },
+  );
+  context.applyVisaEdit(before, visa({ expiryDate: '2026-12-20', notes: 'x' }));
+  assert.deepEqual(plain(context.State.tasks).map(t => t.id), ['old', 'open']);
+});
+
+test('changing the expiry starts a new cycle but keeps completed tasks as records', () => {
+  const context = loadVisaCode([{ id: 'other', title: 'unrelated', status: '进行中' }]);
+  const before = visa();
+  context.deriveVisaTasks(before);
+  context.State.tasks[1].status = '已完成';
+  const doneId = context.State.tasks[1].id;
+
+  const created = context.applyVisaEdit(before, visa({ expiryDate: '2030-01-01' }));
+
+  const tasks = plain(context.State.tasks);
+  assert.equal(created, 3);
+  assert.ok(tasks.some(t => t.id === 'other'));
+  assert.equal(tasks.find(t => t.id === doneId).status, '已完成');
+  const open = tasks.filter(t => t.linkedVisaId === 'v1' && t.status !== '已完成');
+  assert.equal(open.length, 3);
+  assert.ok(open.every(t => t.title.includes('2030-01-01')));
+});
+
+test('a replacement pattern in a visa label is copied literally', () => {
+  const context = loadVisaCode([]);
+  const before = visa();
+  context.deriveVisaTasks(before);
+  context.applyVisaEdit(before, visa({ visaType: "$&$'" }));
+  assert.ok(plain(context.State.tasks).every(t => t.title.includes("$&$'")));
+});

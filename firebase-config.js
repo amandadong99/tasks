@@ -697,6 +697,12 @@ window.AmandaFirebase = {
         }
       }
 
+      // 业务员的种子每台设备各生成一份 id，云端已有同名的就不再上传
+      if (stateKey === 'salespeople') {
+        const names = new Set(remoteItems.map(i => i.name));
+        localOnly = localOnly.filter(item => !names.has(item.name));
+      }
+
       const hasDeletes = (this._deletedIds[stateKey]?.size || 0) > 0;
       if (remoteItems.length > 0 || localOnly.length > 0 || hasDeletes) {
         A.State[stateKey] = [...remoteItems, ...localOnly];
