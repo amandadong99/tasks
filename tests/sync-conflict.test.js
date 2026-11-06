@@ -289,3 +289,87 @@ test('history entries written on two devices at once are both kept', async () =>
     assert.deepEqual(contents, ['from laptop', 'from phone', 'seed'], device.name);
   }
 });
+
+/** 云端已有真实数据的账号：手机和电脑都连着。 */
+async function accountWithData() {
+  const { server, key } = await setup([openTask('t1'), openTask('t2')]);
+  const phone = await connected(server, key, { name: 'phone' });
+  const desk = await connected(server, key, { name: 'desk' });
+  phone.complete('t1');
+  await settle();
+  return { server, key, phone, desk };
+}
+
+const tombstones = server => [...server.docs.keys()].filter(path => path.includes('_deletions'));
+
+test('resetting local data never deletes real tasks from the cloud or other devices', async () => {
+  const { server, key, phone, desk } = await accountWithData();
+
+  phone.resetData();
+  phone.A.State.tasks[0].note = 'touched a seed task';
+  phone.context.window.__persistTasks();     // 重置后的第一次保存
+  await settle();
+
+  assert.deepEqual(tombstones(server), []);
+  assert.deepEqual(JSON.parse(phone.storage.getItem(phone.fb.DELETE_QUEUE_KEY) || '[]'), []);
+  assert.equal((await readCloudTask(server, phone, key, 't1')).status, COMPLETED);
+  assert.ok(await readCloudTask(server, phone, key, 't2'));
+  assert.equal(desk.task('t1').status, COMPLETED);
+  assert.ok(desk.task('t2'));
+});
+
+test('resetting local data leaves no seed in the cloud and reloads the real data', async () => {
+  const { server, key, phone } = await accountWithData();
+  const docsBefore = server.docs.size;
+
+  phone.resetData();
+  await settle();
+  assert.equal(phone.reloads, 1);
+  assert.equal(server.docs.size, docsBefore);
+
+  const storage = phone.storage;
+  phone.kill();
+  const reopened = await connected(server, key, { storage, name: 'phone' });
+
+  assert.equal(reopened.task('t1').status, COMPLETED);
+  assert.deepEqual(Array.from(reopened.A.State.tasks, t => t.id).sort(), ['t1', 't2']);
+  assert.equal(server.docs.size, docsBefore);
+});
+
+test('a reset warns before dropping changes that were never uploaded', async () => {
+  const { phone } = await accountWithData();
+  phone.client.setOnline(false);
+  phone.complete('t2');
+  await settle();
+  phone.resetData();
+  assert.match(phone.lastConfirm, /1 条修改/);
+});
+
+test('a cancelled reset changes nothing', async () => {
+  const { phone } = await accountWithData();
+  phone.confirmAnswer = false;
+  phone.resetData();
+  assert.equal(phone.task('t1').status, COMPLETED);
+  assert.equal(phone.reloads, 0);
+});
+
+test('re-seeded salespeople do not duplicate names already in the cloud', async () => {
+  const { server, key } = await setup();
+  const first = await connected(server, key, { name: 'first' });
+  first.A.State.salespeople.push({ id: 'cloud-judy', name: 'Judy' });
+  first.context.window.__persistSalespeople();
+  await settle();
+  first.kill();
+
+  const device = new Device(server, { name: 'second' });
+  device.A.State.salespeople = [
+    { id: 'seed-judy', name: 'Judy' },
+    { id: 'seed-new', name: 'Added Offline' },
+  ];
+  device.A.Store.save('amanda.salespeople', device.A.State.salespeople);
+  device.A.captureSyncSnapshot();
+  await device.connect(key);
+
+  const ids = Array.from(device.A.State.salespeople, p => p.id).sort();
+  assert.deepEqual(ids, ['cloud-judy', 'seed-new']);
+});

@@ -8,7 +8,7 @@
 'use strict';
 
 /* === 版本号(与 service-worker.js 的 CACHE_VERSION 保持一致)=== */
-const APP_VERSION = 'v5.11.8';
+const APP_VERSION = 'v5.11.9';
 const EMBED_MODE = new URLSearchParams(window.location.search).get('embed') || '';
 const EMBED_TRIP = EMBED_MODE === 'trip';
 const EMBED_SYNC = EMBED_MODE === 'sync';
@@ -2858,24 +2858,48 @@ function mkVisaTask(visa, title, dueDate, node) {
   };
 }
 
-function deriveVisaTasks(visa) {
-  const today = todayISO();
+function visaTaskLabel(visa) {
   const head = visa.docType === '护照' ? '换发护照' : `重新办理签证:${visa.country}`;
   const extra = visa.visaType ? ` ${visa.visaType}` : '';
+  return `${head}${extra}(${visa.expiryDate} 到期)`;
+}
+
+function deriveVisaTasks(visa) {
+  const today = todayISO();
+  const label = visaTaskLabel(visa);
   const made = [];
   for (const node of VISA_NODES) {
     const dueDate = addDays(visa.expiryDate, -node.days);
     if (dueDate < today) continue;   // 已经过去的节点不补建
-    made.push(mkVisaTask(visa, `${head}${extra}(${visa.expiryDate} 到期)· 提前${node.days}天`, dueDate, node));
+    made.push(mkVisaTask(visa, `${label}· 提前${node.days}天`, dueDate, node));
   }
   if (!made.length) {
     const left = daysBetween(today, visa.expiryDate);
     const tail = left < 0 ? `已过期 ${-left} 天,需重新办理` : `已不足 30 天,尽快办理`;
-    made.push(mkVisaTask(visa, `${head}${extra}(${visa.expiryDate} 到期)· ${tail}`, today, VISA_NODES[2]));
+    made.push(mkVisaTask(visa, `${label}· ${tail}`, today, VISA_NODES[2]));
   }
   State.tasks.push(...made);
   visa.relatedTaskIds = made.map(t => t.id);
   return made.length;
+}
+
+/**
+ * 保存证件时处理它派生的提醒任务，返回新建的条数。
+ * 有效期没变：还是同一轮办理，原任务全部沿用（完成状态、进度、延期都在），只更新标题。
+ * 有效期变了：进入新一轮，未完成的提醒按新日期重建，已完成的留作记录。
+ * 备注：不要动其他主程序内容，不要动登录系统。
+ */
+function applyVisaEdit(existing, nv) {
+  const linked = State.tasks.filter(t => t.linkedVisaId === nv.id);
+  if (existing && existing.expiryDate === nv.expiryDate && linked.length) {
+    const from = visaTaskLabel(existing);
+    const to = visaTaskLabel(nv);
+    for (const task of linked) task.title = task.title.split(from).join(to);
+    nv.relatedTaskIds = linked.map(t => t.id);
+    return 0;
+  }
+  State.tasks = State.tasks.filter(t => t.linkedVisaId !== nv.id || t.status === '已完成');
+  return deriveVisaTasks(nv);
 }
 
 function openVisaModal(existing, defaultType) {
@@ -2885,7 +2909,7 @@ function openVisaModal(existing, defaultType) {
 
   const actions = [
     { label: '取消', onClick: closeModal },
-    { label: existing ? '保存并重建提醒' : '保存并建提醒', primary: true, onClick: () => {
+    { label: existing ? '保存' : '保存并建提醒', primary: true, onClick: () => {
       const nv = existing ? { ...existing } : { id: uuid(), relatedTaskIds: [] };
       nv.docType    = $('#visa-doctype').value;
       nv.country    = $('#visa-country').value.trim();
@@ -2895,18 +2919,16 @@ function openVisaModal(existing, defaultType) {
       if (!nv.expiryDate) { toast('请填写有效期至'); return; }
       if (nv.docType === '签证' && !nv.country) { toast('请填写国家/地区'); return; }
 
-      // 重建:先清掉这本证件原来的派生任务
-      State.tasks = State.tasks.filter(x => x.linkedVisaId !== nv.id);
       if (existing) {
         const i = State.visas.findIndex(x => x.id === nv.id);
         if (i >= 0) State.visas[i] = nv; else State.visas.push(nv);
       } else {
         State.visas.push(nv);
       }
-      const n = deriveVisaTasks(nv);
+      const n = applyVisaEdit(existing, nv);
       persistVisas(); persistTasks();
       closeModal(); renderAll(); openVisaManager();
-      toast(`已保存 · 生成 ${n} 条办理提醒`);
+      toast(n ? `已保存 · 生成 ${n} 条办理提醒` : '已保存 · 办理提醒已保留');
     }},
   ];
 
@@ -2930,7 +2952,7 @@ function openVisaModal(existing, defaultType) {
       <label>种类/说明<input id="visa-kind" value="${escapeHtml(v.visaType)}" placeholder="如:B1/B2 十年多次 · 落地签 · 因私护照"></label>
       <label>有效期至<input id="visa-exp" type="date" value="${v.expiryDate || ''}"></label>
       <label>备注<input id="visa-notes" value="${escapeHtml(v.notes || '')}" placeholder="如:每次停留不超过90天"></label>
-      <div class="muted small">保存后自动在到期前 90 / 60 / 30 天各建一条办理任务(90 普通 · 60 琥珀 · 30 红色)。已经过去的节点不补建;若已不足 30 天或已过期,直接建一条今天到期的任务。</div>
+      <div class="muted small">保存后自动在到期前 90 / 60 / 30 天各建一条办理任务(90 普通 · 60 琥珀 · 30 红色)。已经过去的节点不补建;若已不足 30 天或已过期,直接建一条今天到期的任务。修改有效期时,未完成的提醒按新日期重建,已完成的保留。</div>
       <div class="muted small">建议不要在这里填写护照号等证件号码。</div>`,
     actions,
     extraButtons,
@@ -4307,11 +4329,20 @@ function importData() {
   input.click();
 }
 
+/**
+ * 重置只清本机：云端和其他设备的数据不动，连着云端时重新打开后会自动拉回来。
+ * 种子换掉真实数据不是用户的删除，必须同步更新基线，否则下一次保存会把
+ * 所有真实记录当作已删除，写墓碑后连云端和其他设备一起删掉。
+ * 备注：不要动其他主程序内容，不要动登录系统。
+ */
 function resetData() {
-  if (!confirm('确定清空本地数据并重新预填种子?')) return;
+  const pending = window.AmandaFirebase?._pendingOutbox?.().length || 0;
+  const warning = pending ? `\n\n还有 ${pending} 条修改没有上传到云端,重置后会丢失。` : '';
+  if (!confirm(`确定清空本机数据并重新预填种子?云端数据不受影响。${warning}`)) return;
   Object.values(KEY).forEach(k => k !== KEY.docKey && Store.remove(k));
   initData();
-  closeModal(); renderAll(); toast('已重置');
+  captureSyncSnapshot();
+  location.reload();
 }
 
 /** 查找重复:把 title+dueDate+domain 完全相同的任务视为重复 */
@@ -4659,7 +4690,7 @@ function init() {
   });
 
   // 控制台命令 + 暴露给 firebase-config.js 调用
-  window.AmandaTasks = { State, Store, KEY, renderAll, captureSyncSnapshot, Lock };
+  window.AmandaTasks = { State, Store, KEY, renderAll, captureSyncSnapshot, stampLocalChanges, Lock };
   setupTwinRiderBridge();
 
   // 启动 Firebase 同步:先锁屏校验密钥

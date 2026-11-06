@@ -183,6 +183,8 @@ class Device {
     this.clockOffsetMs = clockOffsetMs;
     this.client = new FakeClient(server);
     this.renders = 0;
+    this.reloads = 0;
+    this.confirmAnswer = true;
 
     const context = vm.createContext({
       window: {}, localStorage: this.storage, crypto: webcrypto, TextEncoder, TextDecoder,
@@ -207,6 +209,7 @@ class Device {
     const appSource = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
     vm.runInContext(`${extractPersistenceCode(appSource)}
       window.__persistTasks = persistTasks;
+      window.__persistSalespeople = persistSalespeople;
       window.AmandaTasks = {
         State, Store, KEY,
         renderAll() { window.__onRender && window.__onRender(); },
@@ -253,6 +256,33 @@ class Device {
     t.completedAt = new Date(Date.now() + this.clockOffsetMs).toISOString();
     (t.progressHistory ||= []).push({ date: '2026-11-06', type: '推进', content: '标记完成' });
     this.context.window.__persistTasks();
+  }
+  /** 运行 app.js 里真实的 resetData；initData 用首次预填分支的最小等价写法。 */
+  resetData() {
+    const { context } = this;
+    if (!context.window.__resetData) {
+      const source = fs.readFileSync(path.join(ROOT, 'app.js'), 'utf8');
+      const start = source.indexOf('function resetData(');
+      const code = source.slice(start, source.indexOf('/** 查找重复', start));
+      Object.assign(context, {
+        confirm: message => { this.lastConfirm = message; return this.confirmAnswer; },
+        closeModal() {}, toast() {}, renderAll() {},
+        location: { reload: () => { this.reloads++; } },
+      });
+      context.Store.remove = k => this.storage.removeItem(k);
+      vm.runInContext(`
+        KEY.meta = 'amanda.meta'; KEY.docKey = 'amanda.docKey';
+        function initData() {
+          State.tasks = [{ id: 'seed-1', title: 'seed', status: '进行中',
+            progressHistory: [{ date: '2026-11-06', type: '创建', content: '系统预填' }] }];
+          State.trips = []; State.notes = []; State.visas = [];
+          Store.save(KEY.tasks, State.tasks);
+          Store.save(KEY.meta, { seeded: true });
+        }
+        ${code}
+        window.__resetData = resetData;`, context);
+    }
+    context.window.__resetData();
   }
   /** App 被杀：内存和监听都消失，只有 storage 留下。 */
   kill() {
